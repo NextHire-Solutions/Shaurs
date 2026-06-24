@@ -26,7 +26,7 @@ type Filter = 'all' | 'risk' | 'ok' | 'done' | 'active' | 'paused' | 'inactive' 
 
 type PlanFilter = 'all' | 'minimum' | 'production' | 'partner';
 
-type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails';
+type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'progress';
 type SortBy = null | { col: SortCol; dir: 'desc' | 'asc' };
 
 type DatePreset = 'last7' | 'last30' | 'ytd' | 'custom' | null;
@@ -205,6 +205,9 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
     } else if (sortBy?.col === 'emails') {
       const mul = sortBy.dir === 'desc' ? 1 : -1;
       list = [...list].sort((a, b) => mul * (derive(b, key).emails - derive(a, key).emails));
+    } else if (sortBy?.col === 'progress') {
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
+      list = [...list].sort((a, b) => mul * (derive(b, key).campaignsAvgPct - derive(a, key).campaignsAvgPct));
     }
     return list;
   }, [clients, filter, planFilter, sortBy, dateRange, key]);
@@ -290,6 +293,8 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       clientPaused,
       plans,
       conv: convDen > 0 ? ((convNum / convDen) * 1000).toFixed(1) + '%' : '—',
+      // Raw avg (per-1k units, matches the displayed number) for row color logic.
+      convAvg: convDen > 0 ? (convNum / convDen) * 1000 : 0,
     };
   }, [clients, key]);
 
@@ -522,6 +527,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
           <SummaryCard label="Clients" cls="n-total" num={summary.total} sub="active" />
           <SummaryCard label="At Risk" cls="n-risk" num={summary.risk} sub="below half target" />
           <SummaryCard label="On Track" cls="n-ok" num={summary.ok} sub="meeting target this week" />
+          <SummaryCard label="Done" cls="n-done" num={summary.done} sub="met weekly target" />
           <SummaryCard label="Intros Sent" cls="n-intros" num={summary.intros} sub="across all clients" />
           <SummaryCard label="Intros Target" cls="n-target" num={summary.target} sub="weekly across all clients" />
           <SummaryCard label="Client Paused" cls="n-cpaused" num={summary.clientPaused} sub="manually paused" />
@@ -670,7 +676,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                     >
                       Left This Week <em className="sort-icon">{sortIcon('leftWeek')}</em>
                     </th>
-                    <th>Campaign Progress</th>
+                    <th
+                      className={'sortable' + (sortBy?.col === 'progress' ? ' sorted' : '')}
+                      onClick={() => cycleSort('progress')}
+                      title="Sort by average campaign progress — click to cycle desc / asc / reset"
+                    >
+                      Campaign Progress <em className="sort-icon">{sortIcon('progress')}</em>
+                    </th>
                     <th
                       className={'sortable' + (sortBy?.col === 'lastIntro' ? ' sorted' : '')}
                       onClick={() => cycleSort('lastIntro')}
@@ -691,6 +703,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       client={c}
                       weekKey={key}
                       campaignSelection={campaignSelections[c.id] ?? '__avg__'}
+                      convAvg={summary.convAvg}
                       onCampaignChange={(camp) =>
                         setCampaignSelections((prev) => ({ ...prev, [c.id]: camp }))
                       }
@@ -1000,10 +1013,20 @@ function SummaryCard({
   );
 }
 
+// Avg-based color rule for the per-row Conv. Rate cell.
+// > 3 = green, 1-3 AND ≥ avg = orange, everything else = red.
+function convClassFor(pct: number | null, avg: number): 'good' | 'mid' | 'low' | 'none' {
+  if (pct === null) return 'none';
+  if (pct > 3) return 'good';
+  if (pct >= 1 && pct >= avg) return 'mid';
+  return 'low';
+}
+
 function ClientRow({
   client,
   weekKey: wk,
   campaignSelection,
+  convAvg,
   onCampaignChange,
   onShowCampaigns,
   onEdit,
@@ -1014,6 +1037,7 @@ function ClientRow({
   client: DashboardClient;
   weekKey: string;
   campaignSelection: string;
+  convAvg: number;
   onCampaignChange: (id: string) => void;
   onShowCampaigns: () => void;
   onEdit: () => void;
@@ -1048,30 +1072,33 @@ function ClientRow({
     />
   );
 
-  // conv cell — intros as a percentage of emails sent
+  // conv cell — intros per 1k emails, colored against the dashboard avg
+  const convCls = convClassFor(d.convPct, convAvg);
   const convCell =
     d.convPct === null ? (
       <span className="conv-rate conv-none">—</span>
     ) : (
-      <span className={`conv-rate conv-${d.convClass}`}>{d.convPct.toFixed(1)}%</span>
+      <span className={`conv-rate conv-${convCls}`}>{d.convPct.toFixed(1)}%</span>
     );
 
-  // left pill
+  // left cell — gray "0" once the weekly target is met
   const leftCell =
     client.weekly_target === 0 ? (
       <span className="left-none">—</span>
     ) : d.metTarget ? (
-      <span className="left-pill left-done">✓ Done</span>
+      <span className="left-zero">0</span>
     ) : (
       <span className="left-pill left-short">{d.leftThisWeek} left</span>
     );
 
-  // status badge
+  // status badge — Done supersedes On Track when target is met
   const statusCell =
     d.status === 'pending' ? (
       <span className="status-badge s-pending"><span className="status-dot" />Pending</span>
     ) : d.status === 'risk' ? (
       <span className="status-badge s-risk"><span className="status-dot" />At Risk</span>
+    ) : d.status === 'done' ? (
+      <span className="status-badge s-done"><span className="status-dot" />Done</span>
     ) : (
       <span className="status-badge s-ok"><span className="status-dot" />On Track</span>
     );

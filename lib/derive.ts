@@ -80,7 +80,7 @@ export interface DerivedRow {
   hasEmails: boolean;
   hasIntros: boolean;
   metTarget: boolean;
-  status: 'risk' | 'ok' | 'pending';
+  status: 'risk' | 'ok' | 'done' | 'pending';
   convPct: number | null; // intros per 1,000 emails (displayed with "%" suffix per product spec)
   convClass: 'good' | 'mid' | 'low' | 'none';
   leftThisWeek: number; // 0 if met
@@ -97,12 +97,15 @@ export function derive(c: DashboardClient, weekKey: string): DerivedRow {
   const emails = m.emails_sent;
 
   const metTarget = c.weekly_target > 0 && intros >= c.weekly_target;
-  // Per spec: At Risk if below half of weekly target, On Track otherwise.
-  const status: 'risk' | 'ok' | 'pending' = c.weekly_target === 0
+  // Status precedence: pending (no target) → done (target met) → risk
+  // (below half) → ok (between half and target).
+  const status: 'risk' | 'ok' | 'done' | 'pending' = c.weekly_target === 0
     ? 'pending'
-    : intros < c.weekly_target / 2
-      ? 'risk'
-      : 'ok';
+    : metTarget
+      ? 'done'
+      : intros < c.weekly_target / 2
+        ? 'risk'
+        : 'ok';
 
   let convPct: number | null = null;
   let convClass: 'good' | 'mid' | 'low' | 'none' = 'none';
