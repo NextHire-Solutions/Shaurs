@@ -20,7 +20,8 @@ export function generateSeed(): DashboardClient[] {
 
   // For seed/preview we hand out one fictional "current week" metrics row per client.
   // The map() below fills all default-able fields so the literals here can omit them.
-  const seed: Omit<
+  type SeedCampaign<T> = Omit<T, 'reply_count' | 'interested_count'>;
+  const seed: (Omit<
     DashboardClient,
     'hidden'
     | 'client_paused'
@@ -30,7 +31,12 @@ export function generateSeed(): DashboardClient[] {
     | 'billing_interval'
     | 'emails_today'
     | 'emails_today_date'
-  >[] = [
+    | 'campaigns'
+    | 'bisonCampaigns'
+  > & {
+    campaigns: SeedCampaign<DashboardClient['campaigns'][number]>[];
+    bisonCampaigns: SeedCampaign<DashboardClient['bisonCampaigns'][number]>[];
+  })[] = [
     {
       id: 'de001',
       name: 'Douglas Elliman',
@@ -165,5 +171,10 @@ export function generateSeed(): DashboardClient[] {
     billing_interval: 'biweekly' as const,
     emails_today: 0,
     emails_today_date: null,
+    // Fill reply_count + interested_count on every nested campaign so they
+    // satisfy the InstantlyCampaign / BisonCampaign types without bloating
+    // each literal above.
+    campaigns: c.campaigns.map((cc) => ({ ...cc, reply_count: 0, interested_count: 0 })),
+    bisonCampaigns: c.bisonCampaigns.map((cc) => ({ ...cc, reply_count: 0, interested_count: 0 })),
   }));
 }

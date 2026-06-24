@@ -70,6 +70,8 @@ export interface BisonCampaignSummary {
   emails_sent?: number;
   total_leads?: number;
   total_leads_contacted?: number;
+  replied?: number;          // total replies
+  unique_replies?: number;   // unique replies (one per lead) — preferred for reply-rate math
   interested?: number;
   completion_percentage?: number;
   created_at?: string;

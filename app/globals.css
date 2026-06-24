@@ -209,6 +209,18 @@ td { padding: 13px 16px; font-size: 13px; vertical-align: middle; }
 .camps-popup-row .camp-row-foot strong {
   font-weight: 700; color: var(--text);
 }
+.camps-popup-row .camp-row-rates {
+  display: flex; gap: 16px; margin-top: 6px;
+  font-size: 11px; color: var(--text-muted);
+}
+.camp-rate { display: inline-flex; gap: 6px; align-items: baseline; }
+.camp-rate-label {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  opacity: 0.7;
+}
+.camp-rate-val { color: var(--text); font-weight: 600; }
 .camps-popup-row .camp-status-chip {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 11px; font-weight: 600;

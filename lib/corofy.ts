@@ -23,6 +23,12 @@ export interface CorofyIntro {
   assigned_at: string; // ISO 8601 UTC
   lead_email?: string | null;
   lead_name?: string | null;
+  // Per-record campaign attribution (present on the Interested feed).
+  // Instantly campaigns return a UUID string; Bison returns the integer id
+  // as a short string (e.g. "55"). Match against instantly_campaigns.id
+  // or against bison_campaigns.int_id (cast to string).
+  campaign_id?: string | null;
+  campaign_name?: string | null;
 }
 
 interface CorofyIntrosResp {

@@ -12,6 +12,8 @@ export interface InstantlyCampaign {
   campaign_size: number;
   progress_pct: number; // 0-100
   status_changed_at?: string | null;
+  reply_count: number;       // unique replies (from Instantly analytics)
+  interested_count: number;  // Corofy "Interested" labels attributed to this campaign
 }
 
 export interface BisonCampaign {
@@ -22,6 +24,8 @@ export interface BisonCampaign {
   campaign_size: number;
   progress_pct: number; // 0-100
   status_changed_at?: string | null;
+  reply_count: number;       // unique replies (from Bison campaign list)
+  interested_count: number;  // Corofy "Interested" labels attributed to this campaign
 }
 
 export type BillingInterval = 'biweekly' | '28-days' | 'monthly';

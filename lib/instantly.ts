@@ -56,7 +56,8 @@ export interface InstantlyAnalyticsItem {
   contacted_count: number;
   emails_sent_count: number;
   new_leads_contacted_count: number;
-  reply_count: number;
+  reply_count: number;          // total replies (includes auto-replies)
+  reply_count_unique?: number;  // unique replies (one per lead) — preferred for reply-rate math
   bounced_count: number;
   completed_count: number;
   total_opportunities: number;

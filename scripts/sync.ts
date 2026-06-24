@@ -164,6 +164,7 @@ async function runInstantly(): Promise<SyncResult['instantly']> {
         emails_sent_total: number;
         campaign_size: number;
         progress_pct: number;
+        reply_count: number;
         status_changed_at?: string | null;
       } = {
         id: c.id,
@@ -172,6 +173,10 @@ async function runInstantly(): Promise<SyncResult['instantly']> {
         emails_sent_total: a?.emails_sent_count ?? 0,
         campaign_size: a ? campaignSize(a) : 0,
         progress_pct: a ? Number(progressPct(a).toFixed(2)) : 0,
+        // Prefer unique replies (one per lead); fall back to total reply_count
+        // if the analytics row doesn't carry unique. interested_count is
+        // written below by the Corofy step, not here.
+        reply_count: a?.reply_count_unique ?? a?.reply_count ?? 0,
       };
       // Only include status_changed_at in the upsert payload when we actually
       // want to write it (undefined means "leave existing value alone").
@@ -314,6 +319,7 @@ async function runBison(): Promise<SyncResult['bison']> {
         emails_sent_total: number;
         campaign_size: number;
         progress_pct: number;
+        reply_count: number;
         status_changed_at?: string | null;
       } = {
         id: c.uuid,
@@ -323,6 +329,9 @@ async function runBison(): Promise<SyncResult['bison']> {
         emails_sent_total: c.emails_sent ?? 0,
         campaign_size: bisonCampaignSize(c),
         progress_pct: Number(bisonProgressPct(c).toFixed(2)),
+        // Prefer unique_replies; fall back to total replied. interested_count
+        // is written below by the Corofy step.
+        reply_count: c.unique_replies ?? c.replied ?? 0,
       };
       if (stamp !== undefined) base.status_changed_at = stamp;
       return base;
@@ -583,6 +592,43 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
         }
       }
       console.warn(`[corofy] Interested rows bucketed: ${interestedTotal}`);
+
+      // Also attribute Interested rows to specific campaigns in our cache.
+      // Corofy's campaign_id is an Instantly UUID for some records or a Bison
+      // integer id (as string) for others. We bucket by campaign_id and write
+      // interested_count on each campaign-cache table.
+      const interestedByCampaign = new Map<string, number>();
+      for (const r of interestedRows) {
+        const cid = r.campaign_id;
+        if (!cid) continue;
+        interestedByCampaign.set(cid, (interestedByCampaign.get(cid) ?? 0) + 1);
+      }
+      let instMatched = 0;
+      let bisonMatched = 0;
+      const { data: instCampaigns } = await sb.from('instantly_campaigns').select('id');
+      for (const ic of (instCampaigns ?? []) as { id: string }[]) {
+        const n = interestedByCampaign.get(ic.id) ?? 0;
+        const { error } = await sb
+          .from('instantly_campaigns')
+          .update({ interested_count: n })
+          .eq('id', ic.id);
+        if (!error && n > 0) instMatched++;
+      }
+      const { data: bisonCampaignRows } = await sb
+        .from('bison_campaigns')
+        .select('id, int_id');
+      for (const bc of (bisonCampaignRows ?? []) as { id: string; int_id: number | null }[]) {
+        if (bc.int_id == null) continue;
+        const n = interestedByCampaign.get(String(bc.int_id)) ?? 0;
+        const { error } = await sb
+          .from('bison_campaigns')
+          .update({ interested_count: n })
+          .eq('id', bc.id);
+        if (!error && n > 0) bisonMatched++;
+      }
+      console.warn(
+        `[corofy] Interested per-campaign attribution: instantly=${instMatched} bison=${bisonMatched} (of ${interestedByCampaign.size} distinct Corofy campaign_ids)`,
+      );
     } catch (e) {
       console.warn(`[corofy] Interested fetch failed: ${(e as Error).message}`);
     }

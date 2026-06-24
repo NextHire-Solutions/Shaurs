@@ -56,6 +56,8 @@ interface PopupCampaign {
   progress_pct: number;
   status_changed_at?: string | null;
   source: CampaignSource;
+  reply_count: number;
+  interested_count: number;
 }
 
 interface ModalState {
@@ -995,6 +997,33 @@ function CampaignRow({ c }: { c: PopupCampaign }) {
           <span className="chip-label">{statusLabel}</span>
         </span>
       </div>
+      {(() => {
+        const sentNum = c.emails_sent_total ?? 0;
+        const replyNum = c.reply_count ?? 0;
+        const interestedNum = c.interested_count ?? 0;
+        const replyPct = sentNum > 0 ? (replyNum / sentNum) * 100 : null;
+        const posPct = replyNum > 0 ? (interestedNum / replyNum) * 100 : null;
+        return (
+          <div className="camp-row-rates">
+            <span className="camp-rate">
+              <span className="camp-rate-label">Reply</span>
+              <span className="camp-rate-val">
+                {replyPct === null
+                  ? '—'
+                  : `${replyPct.toFixed(1)}% (${replyNum.toLocaleString()})`}
+              </span>
+            </span>
+            <span className="camp-rate">
+              <span className="camp-rate-label">Positive</span>
+              <span className="camp-rate-val">
+                {posPct === null
+                  ? '—'
+                  : `${posPct.toFixed(1)}% (${interestedNum.toLocaleString()})`}
+              </span>
+            </span>
+          </div>
+        );
+      })()}
     </div>
   );
 }
