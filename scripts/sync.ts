@@ -19,7 +19,7 @@ import {
   listBisonCampaigns,
   mapBisonStatus,
 } from '../lib/bison';
-import { addDays, getMondayOf, normalizeName, weekKey } from '../lib/derive';
+import { addDays, getMondayOf, normalizeName, todayInET, weekKey } from '../lib/derive';
 import { listCorofyIntros } from '../lib/corofy';
 import { listCorofyPortals } from '../lib/portals';
 import { autoMatchCampaignIds } from '../lib/matchCampaigns';
@@ -40,7 +40,18 @@ interface SyncResult {
 }
 
 
+// Per-cron-run state for today's email rollup. runInstantly + runBison
+// populate these per-campaign maps during their daily-data loops; runSync
+// reads them after both finish and writes clients.emails_today.
+let todayInstantlyByCampaign: Map<string, number> = new Map();
+let todayBisonByCampaign: Map<string, number> = new Map();
+let todayET = '';
+
 export async function runSync(): Promise<SyncResult> {
+  // Reset module-level today's-emails state for this run.
+  todayInstantlyByCampaign = new Map();
+  todayBisonByCampaign = new Map();
+  todayET = todayInET();
   const result: SyncResult = {
     instantly: { ok: false },
     bison: { ok: false },
@@ -49,7 +60,30 @@ export async function runSync(): Promise<SyncResult> {
   result.instantly = await runInstantly();
   result.bison = await runBison();
   result.corofy = await runCorofy();
+  await updateClientsTodayEmails().catch((e) =>
+    console.warn(`[today-emails] writeback failed: ${(e as Error).message}`),
+  );
   return result;
+}
+
+async function updateClientsTodayEmails(): Promise<void> {
+  const sb = getSupabase();
+  const { data: clients } = await sb
+    .from('clients')
+    .select('id, instantly_campaign_ids, bison_campaign_ids');
+  if (!clients) return;
+  let written = 0;
+  for (const c of clients as { id: string; instantly_campaign_ids: string[]; bison_campaign_ids: string[] }[]) {
+    let total = 0;
+    for (const cid of c.instantly_campaign_ids ?? []) total += todayInstantlyByCampaign.get(cid) ?? 0;
+    for (const cid of c.bison_campaign_ids ?? []) total += todayBisonByCampaign.get(cid) ?? 0;
+    const { error } = await sb
+      .from('clients')
+      .update({ emails_today: total, emails_today_date: todayET })
+      .eq('id', c.id);
+    if (!error) written++;
+  }
+  console.warn(`[today-emails] ${todayET}: wrote ${written}/${clients.length} clients`);
 }
 
 // All ISO Mondays for the visible window, oldest → newest.
@@ -191,6 +225,13 @@ async function runInstantly(): Promise<SyncResult['instantly']> {
           if (!d.date) continue;
           const wk = weekKey(d.date);
           buckets.set(wk, (buckets.get(wk) ?? 0) + (d.sent ?? 0));
+          // Capture today's-only count for the per-client "Today" rollup.
+          if (d.date === todayET) {
+            todayInstantlyByCampaign.set(
+              cid,
+              (todayInstantlyByCampaign.get(cid) ?? 0) + (d.sent ?? 0),
+            );
+          }
         }
         campaignWeekly.set(cid, buckets);
       } catch (err) {
@@ -340,6 +381,12 @@ async function runBison(): Promise<SyncResult['bison']> {
           if (!d.date) continue;
           const wk = weekKey(d.date);
           buckets.set(wk, (buckets.get(wk) ?? 0) + (d.sent ?? 0));
+          if (d.date === todayET) {
+            todayBisonByCampaign.set(
+              cid,
+              (todayBisonByCampaign.get(cid) ?? 0) + (d.sent ?? 0),
+            );
+          }
         }
         campaignWeekly.set(cid, buckets);
       } catch (err) {

@@ -5,6 +5,7 @@ import { getSupabase } from './supabase';
 import { generateSeed } from './seed';
 import {
   HISTORICAL_WEEKS,
+  type BillingInterval,
   type BisonCampaign,
   type DashboardClient,
   type InstantlyCampaign,
@@ -25,6 +26,10 @@ interface ClientRow {
   hidden: boolean;
   client_paused: boolean;
   portal_active: boolean;
+  billing_anchor_date: string | null;
+  billing_interval: BillingInterval | null;
+  emails_today: number | null;
+  emails_today_date: string | null;
 }
 
 export async function loadDashboardClients(): Promise<{
@@ -111,6 +116,10 @@ export async function loadDashboardClients(): Promise<{
       hidden: c.hidden ?? false,
       client_paused: c.client_paused ?? false,
       portal_active: c.portal_active ?? false,
+      billing_anchor_date: c.billing_anchor_date ?? null,
+      billing_interval: c.billing_interval ?? 'biweekly',
+      emails_today: c.emails_today ?? 0,
+      emails_today_date: c.emails_today_date ?? null,
       campaigns: linkedCampaigns,
       bisonCampaigns: linkedBison,
       metricsByWeek: metricsByClient.get(c.id) ?? {},

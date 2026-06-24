@@ -19,11 +19,17 @@ export function generateSeed(): DashboardClient[] {
   });
 
   // For seed/preview we hand out one fictional "current week" metrics row per client.
-  // The map() below fills hidden / client_paused / portal_active / portalActive
-  // so the literals here can omit them.
+  // The map() below fills all default-able fields so the literals here can omit them.
   const seed: Omit<
     DashboardClient,
-    'hidden' | 'client_paused' | 'portal_active' | 'portalActive'
+    'hidden'
+    | 'client_paused'
+    | 'portal_active'
+    | 'portalActive'
+    | 'billing_anchor_date'
+    | 'billing_interval'
+    | 'emails_today'
+    | 'emails_today_date'
   >[] = [
     {
       id: 'de001',
@@ -155,5 +161,9 @@ export function generateSeed(): DashboardClient[] {
     client_paused: false,
     portal_active: false,
     portalActive: false,
+    billing_anchor_date: null,
+    billing_interval: 'biweekly' as const,
+    emails_today: 0,
+    emails_today_date: null,
   }));
 }

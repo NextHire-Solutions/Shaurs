@@ -24,6 +24,22 @@ export interface BisonCampaign {
   status_changed_at?: string | null;
 }
 
+export type BillingInterval = 'biweekly' | '28-days' | 'monthly';
+
+export const BILLING_INTERVAL_LABEL: Record<BillingInterval, string> = {
+  biweekly: 'Bi-weekly (14 days)',
+  '28-days': 'Every 28 days',
+  monthly: 'Monthly',
+};
+
+// Per-plan biweekly introduction targets. Applied uniformly regardless of
+// billing_interval — a monthly-billed Production client still has target 5.
+export const BIWEEKLY_TARGET: Record<Plan, number> = {
+  partner: 12,
+  production: 5,
+  minimum: 2,
+};
+
 export interface Client {
   id: string;
   name: string;
@@ -36,6 +52,10 @@ export interface Client {
   hidden: boolean;        // manual per-client hide flag (default false)
   client_paused: boolean; // manual "service temporarily paused" flag (default false)
   portal_active: boolean; // synced from Corofy /api/clients/portals by sync-worker
+  billing_anchor_date: string | null; // ISO date, anchor for billing cycle math
+  billing_interval: BillingInterval;
+  emails_today: number;               // today's emails sent (EST)
+  emails_today_date: string | null;   // YYYY-MM-DD the emails_today value is for (EST)
 }
 
 export interface WeeklyMetric {

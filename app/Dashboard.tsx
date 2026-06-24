@@ -4,17 +4,24 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   addDays,
+  biweeklyIntros,
+  daysUntil,
   derive,
   formatWeek,
   getMondayOf,
   isCurrentWeek,
+  nextBillingDate,
+  todayInET,
   weekKey,
 } from '@/lib/derive';
 import { autoMatchCampaignIds } from '@/lib/matchCampaigns';
 import {
+  BILLING_INTERVAL_LABEL,
+  BIWEEKLY_TARGET,
   PLAN_BADGE_CLASS,
   PLAN_DEFAULT_TARGET,
   PLAN_LABEL,
+  type BillingInterval,
   type BisonCampaign,
   type CampaignSource,
   type DashboardClient,
@@ -26,7 +33,7 @@ type Filter = 'all' | 'risk' | 'ok' | 'done' | 'active' | 'paused' | 'inactive' 
 
 type PlanFilter = 'all' | 'minimum' | 'production' | 'partner';
 
-type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'progress' | 'intros' | 'interested' | 'conv';
+type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'today' | 'progress' | 'intros' | 'interested' | 'conv';
 type SortBy = null | { col: SortCol; dir: 'desc' | 'asc' };
 
 type DatePreset = 'last7' | 'last30' | 'ytd' | 'custom' | null;
@@ -58,6 +65,8 @@ interface ModalState {
   plan: Plan;
   startDate: string;
   weeklyTarget: number;
+  billingAnchorDate: string;
+  billingInterval: BillingInterval;
 }
 
 const emptyModal: ModalState = {
@@ -67,6 +76,8 @@ const emptyModal: ModalState = {
   plan: 'production',
   startDate: '',
   weeklyTarget: PLAN_DEFAULT_TARGET.production,
+  billingAnchorDate: '',
+  billingInterval: 'biweekly',
 };
 
 // User-local "today" as YYYY-MM-DD. new Date().toISOString() returns UTC,
@@ -93,6 +104,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
   const [datePreset, setDatePreset] = useState<DatePreset>(null);
   const [datePopoverOpen, setDatePopoverOpen] = useState(false);
   const [search, setSearch] = useState('');
+  const [view, setView] = useState<'weekly' | 'biweekly'>('weekly');
   const [campaignSelections, setCampaignSelections] = useState<Record<string, string>>({});
   const [campaignsPopupClientId, setCampaignsPopupClientId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -209,6 +221,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
     } else if (sortBy?.col === 'emails') {
       const mul = sortBy.dir === 'desc' ? 1 : -1;
       list = [...list].sort((a, b) => mul * (derive(b, key).emails - derive(a, key).emails));
+    } else if (sortBy?.col === 'today') {
+      // Today's emails column — only counts the value if emails_today_date is today (EST).
+      const todayET = todayInET();
+      const todayVal = (c: DashboardClient) =>
+        c.emails_today_date === todayET ? c.emails_today : 0;
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
+      list = [...list].sort((a, b) => mul * (todayVal(b) - todayVal(a)));
     } else if (sortBy?.col === 'progress') {
       const mul = sortBy.dir === 'desc' ? 1 : -1;
       list = [...list].sort((a, b) => mul * (derive(b, key).campaignsAvgPct - derive(a, key).campaignsAvgPct));
@@ -342,6 +361,8 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       plan: c.plan,
       startDate: c.start_date ?? '',
       weeklyTarget: c.weekly_target,
+      billingAnchorDate: c.billing_anchor_date ?? '',
+      billingInterval: c.billing_interval ?? 'biweekly',
     });
   }
 
@@ -364,6 +385,8 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       start_date: modal.startDate || null,
       instantly_campaign_ids: linkedIds,
       bison_campaign_ids: linkedBisonIds,
+      billing_anchor_date: modal.billingAnchorDate || null,
+      billing_interval: modal.billingInterval,
     };
     try {
       if (modal.editingId) {
@@ -394,6 +417,8 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             hidden: false,
             client_paused: false,
             portal_active: false,
+            emails_today: 0,
+            emails_today_date: null,
             campaigns: [],
             bisonCampaigns: [],
             metricsByWeek: {},
@@ -574,6 +599,11 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               <div className="table-subtitle">
                 {isCurrent ? 'Live data from Instantly · Bison · MasterInbox' : `Week of ${formatWeek(currentMonday)}`}
               </div>
+              <div className="view-toggle">
+                <span className="view-toggle-label">View as:</span>
+                <button className={view === 'weekly' ? 'active' : ''} onClick={() => setView('weekly')}>Weekly</button>
+                <button className={view === 'biweekly' ? 'active' : ''} onClick={() => setView('biweekly')}>Bi-Weekly</button>
+              </div>
             </div>
             <div className="filter-pills">
               <input
@@ -677,6 +707,8 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                 <p>Add your first client to start tracking.</p>
                 <button className="btn-add" onClick={openAddModal}>+ Add Client</button>
               </div>
+            ) : view === 'biweekly' ? (
+              <BiWeeklyTable clients={visible} onEditClient={openEditModal} />
             ) : (
               <table>
                 <thead>
@@ -687,6 +719,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       title="Sort by # of active campaigns — click to cycle desc / asc / reset"
                     >
                       Client <em className="sort-icon">{sortIcon('campaigns')}</em>
+                    </th>
+                    <th
+                      className={'sortable' + (sortBy?.col === 'today' ? ' sorted' : '')}
+                      onClick={() => cycleSort('today')}
+                      title="Sort by emails sent today (EST) — click to cycle desc / asc / reset"
+                    >
+                      Today <em className="sort-icon">{sortIcon('today')}</em>
                     </th>
                     <th
                       className={'sortable' + (sortBy?.col === 'emails' ? ' sorted' : '')}
@@ -838,6 +877,28 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               value={modal.startDate}
               onChange={(e) => setModal((m) => ({ ...m, startDate: e.target.value }))}
             />
+          </div>
+
+          <div className="form-group">
+            <label>Billing Anchor Date</label>
+            <input
+              type="date"
+              value={modal.billingAnchorDate}
+              onChange={(e) => setModal((m) => ({ ...m, billingAnchorDate: e.target.value }))}
+            />
+            <div className="form-help">A known billing date. Empty falls back to Start Date.</div>
+          </div>
+
+          <div className="form-group">
+            <label>Billing Interval</label>
+            <select
+              value={modal.billingInterval}
+              onChange={(e) => setModal((m) => ({ ...m, billingInterval: e.target.value as BillingInterval }))}
+            >
+              <option value="biweekly">{BILLING_INTERVAL_LABEL.biweekly}</option>
+              <option value="28-days">{BILLING_INTERVAL_LABEL['28-days']}</option>
+              <option value="monthly">{BILLING_INTERVAL_LABEL.monthly}</option>
+            </select>
           </div>
 
 
@@ -1040,6 +1101,79 @@ function CampaignsPopup({
   );
 }
 
+function BiWeeklyTable({
+  clients,
+  onEditClient,
+}: {
+  clients: DashboardClient[];
+  onEditClient: (c: DashboardClient) => void;
+}) {
+  const today = new Date();
+  const fmtBilling = (d: Date) =>
+    `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}/${d.getUTCFullYear()}`;
+  const rows = clients
+    .map((c) => {
+      const anchor = c.billing_anchor_date ?? c.start_date;
+      const billing = nextBillingDate(anchor, c.billing_interval, today);
+      const days = billing ? daysUntil(billing, today) : null;
+      const intros = biweeklyIntros(c.metricsByWeek, today);
+      const target = BIWEEKLY_TARGET[c.plan];
+      return { c, billing, days, intros, target };
+    })
+    .sort((a, b) => {
+      if (a.days === null && b.days === null) return a.c.name.localeCompare(b.c.name);
+      if (a.days === null) return 1;
+      if (b.days === null) return -1;
+      return a.days - b.days;
+    });
+  return (
+    <table>
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th>Billing Date</th>
+          <th>Days Until Billing</th>
+          <th>Introductions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map(({ c, billing, days, intros, target }) => {
+          const introsCls =
+            intros >= target ? 'bw-done' : intros >= Math.ceil(target / 2) ? 'bw-mid' : 'bw-short';
+          return (
+            <tr key={c.id}>
+              <td className="client-cell">
+                <div className="client-name">{c.name}</div>
+              </td>
+              <td>
+                {billing
+                  ? fmtBilling(billing)
+                  : (
+                    <button className="set-date-link" onClick={() => onEditClient(c)}>
+                      Set billing date
+                    </button>
+                  )}
+              </td>
+              <td>
+                {days === null
+                  ? '—'
+                  : (
+                    <span className={days <= 3 ? 'days-urgent' : ''}>
+                      {days} day{days === 1 ? '' : 's'}
+                    </span>
+                  )}
+              </td>
+              <td>
+                <span className={introsCls}>{intros}/{target}</span>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
 function SummaryCard({
   label,
   cls,
@@ -1100,6 +1234,17 @@ function ClientRow({
     ...client.campaigns.filter((c) => c.status === 'running'),
     ...client.bisonCampaigns.filter((c) => c.status === 'running'),
   ];
+
+  // today's emails (EST). Treat the stored value as 0 if the date doesn't
+  // match today's EST date — guards against showing yesterday's number after
+  // midnight rollover but before the next sync tick.
+  const todayET = todayInET();
+  const todayEmails = client.emails_today_date === todayET ? client.emails_today : 0;
+  const todayCell = todayEmails > 0 ? (
+    <span className="api-num">{todayEmails.toLocaleString()}</span>
+  ) : (
+    <span className="api-none">—</span>
+  );
 
   // emails cell
   const emailsCell = d.emails > 0 ? (
@@ -1297,6 +1442,7 @@ function ClientRow({
           {campsCount > 0 && <span className="client-meta-arrow">›</span>}
         </div>
       </td>
+      <td>{todayCell}</td>
       <td>{emailsCell}</td>
       <td>{introsCell}</td>
       <td>{interestedCell}</td>

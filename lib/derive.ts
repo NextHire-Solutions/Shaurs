@@ -1,4 +1,4 @@
-import type { DashboardClient, WeeklyMetric } from './types';
+import type { BillingInterval, DashboardClient, WeeklyMetric } from './types';
 
 const EMPTY_METRIC: Omit<WeeklyMetric, 'client_id' | 'week_key'> = {
   emails_sent: 0,
@@ -57,6 +57,61 @@ export function fmtDate(d: Date | string): string {
 // vs "C21 Results Elite Team" in clients.name).
 export function normalizeName(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+// YYYY-MM-DD for "today" in America/New_York. Matches the date keys we get
+// from Bison's line-area-chart-stats and Instantly's daily analytics.
+export function todayInET(now = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+}
+
+// Compute the NEXT billing date based on anchor + interval. Returns null when
+// no anchor is provided (caller is expected to fall back to start_date).
+export function nextBillingDate(
+  anchorISO: string | null,
+  interval: BillingInterval,
+  today: Date = new Date(),
+): Date | null {
+  if (!anchorISO) return null;
+  const anchor = asUTC(anchorISO);
+  if (anchor.getTime() > today.getTime()) return anchor;
+  if (interval === 'biweekly' || interval === '28-days') {
+    const step = interval === 'biweekly' ? 14 : 28;
+    const daysSince = Math.floor((today.getTime() - anchor.getTime()) / 86400000);
+    const cyclesSince = Math.max(1, Math.ceil(daysSince / step));
+    return addDays(anchor, cyclesSince * step);
+  }
+  // Monthly: step month-by-month from the anchor until on or after today.
+  const next = new Date(anchor);
+  while (next.getTime() <= today.getTime()) next.setUTCMonth(next.getUTCMonth() + 1);
+  return next;
+}
+
+export function daysUntil(target: Date, today: Date = new Date()): number {
+  const t0 = new Date(today);
+  t0.setUTCHours(0, 0, 0, 0);
+  const t1 = new Date(target);
+  t1.setUTCHours(0, 0, 0, 0);
+  return Math.round((t1.getTime() - t0.getTime()) / 86400000);
+}
+
+// Intros in the last 14 days = current Monday-week + previous Monday-week
+// buckets. Independent of the client's billing interval.
+export function biweeklyIntros(
+  metricsByWeek: Record<string, WeeklyMetric>,
+  today: Date = new Date(),
+): number {
+  const thisMonday = weekKey(getMondayOf(today));
+  const prevMonday = weekKey(addDays(getMondayOf(today), -7));
+  return (
+    (metricsByWeek[thisMonday]?.intros_corofy ?? 0) +
+    (metricsByWeek[prevMonday]?.intros_corofy ?? 0)
+  );
 }
 
 export function formatWeek(monday: Date): string {
