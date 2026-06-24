@@ -1133,6 +1133,9 @@ function CampaignsPopup({
   );
 }
 
+type BwSortCol = 'name' | 'billing' | 'days' | 'intros';
+type BwSortBy = null | { col: BwSortCol; dir: 'desc' | 'asc' };
+
 function BiWeeklyTable({
   clients,
   onEditClient,
@@ -1143,33 +1146,97 @@ function BiWeeklyTable({
   const today = new Date();
   const fmtBilling = (d: Date) =>
     `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}/${d.getUTCFullYear()}`;
-  const rows = clients
-    .map((c) => {
-      const anchor = c.billing_anchor_date ?? c.start_date;
-      const billing = nextBillingDate(anchor, c.billing_interval, today);
-      const days = billing ? daysUntil(billing, today) : null;
-      const intros = biweeklyIntros(c.metricsByWeek, today);
-      const target = BIWEEKLY_TARGET[c.plan];
-      return { c, billing, days, intros, target };
-    })
-    .sort((a, b) => {
-      if (a.days === null && b.days === null) return a.c.name.localeCompare(b.c.name);
-      if (a.days === null) return 1;
-      if (b.days === null) return -1;
-      return a.days - b.days;
+  const [sortBy, setSortBy] = useState<BwSortBy>(null);
+  // 1st click → desc; 2nd → asc; 3rd → reset (default order).
+  function cycleSort(col: BwSortCol) {
+    setSortBy((cur) => {
+      if (!cur || cur.col !== col) return { col, dir: 'desc' };
+      if (cur.dir === 'desc') return { col, dir: 'asc' };
+      return null;
     });
+  }
+  function sortIcon(col: BwSortCol): string {
+    if (sortBy?.col !== col) return '↕';
+    return sortBy.dir === 'desc' ? '↓' : '↑';
+  }
+  const rows = clients.map((c) => {
+    const anchor = c.billing_anchor_date ?? c.start_date;
+    const billing = nextBillingDate(anchor, c.billing_interval, today);
+    const days = billing ? daysUntil(billing, today) : null;
+    const intros = biweeklyIntros(c.metricsByWeek, today);
+    const target = BIWEEKLY_TARGET[c.plan];
+    return { c, billing, days, intros, target };
+  });
+  type Row = (typeof rows)[number];
+  const defaultCmp = (a: Row, b: Row) => {
+    if (a.days === null && b.days === null) return a.c.name.localeCompare(b.c.name);
+    if (a.days === null) return 1;
+    if (b.days === null) return -1;
+    return a.days - b.days;
+  };
+  let sorted: Row[];
+  if (!sortBy) {
+    sorted = [...rows].sort(defaultCmp);
+  } else {
+    const mul = sortBy.dir === 'desc' ? 1 : -1;
+    sorted = [...rows].sort((a, b) => {
+      switch (sortBy.col) {
+        case 'name':
+          // localeCompare is naturally asc — multiply by -mul so desc means Z→A.
+          return -mul * a.c.name.localeCompare(b.c.name);
+        case 'billing':
+          if (!a.billing && !b.billing) return a.c.name.localeCompare(b.c.name);
+          if (!a.billing) return 1;
+          if (!b.billing) return -1;
+          return mul * (b.billing.getTime() - a.billing.getTime());
+        case 'days':
+          if (a.days === null && b.days === null) return a.c.name.localeCompare(b.c.name);
+          if (a.days === null) return 1;
+          if (b.days === null) return -1;
+          return mul * (b.days - a.days);
+        case 'intros':
+          return mul * (b.intros - a.intros);
+        default:
+          return 0;
+      }
+    });
+  }
   return (
     <table>
       <thead>
         <tr>
-          <th>Client</th>
-          <th>Billing Date</th>
-          <th>Days Until Billing</th>
-          <th>Introductions</th>
+          <th
+            className={'sortable' + (sortBy?.col === 'name' ? ' sorted' : '')}
+            onClick={() => cycleSort('name')}
+            title="Sort by client name — click to cycle desc / asc / reset"
+          >
+            Client <em className="sort-icon">{sortIcon('name')}</em>
+          </th>
+          <th
+            className={'sortable' + (sortBy?.col === 'billing' ? ' sorted' : '')}
+            onClick={() => cycleSort('billing')}
+            title="Sort by next billing date — click to cycle desc / asc / reset"
+          >
+            Billing Date <em className="sort-icon">{sortIcon('billing')}</em>
+          </th>
+          <th
+            className={'sortable' + (sortBy?.col === 'days' ? ' sorted' : '')}
+            onClick={() => cycleSort('days')}
+            title="Sort by days until billing — click to cycle desc / asc / reset"
+          >
+            Days Until Billing <em className="sort-icon">{sortIcon('days')}</em>
+          </th>
+          <th
+            className={'sortable' + (sortBy?.col === 'intros' ? ' sorted' : '')}
+            onClick={() => cycleSort('intros')}
+            title="Sort by introductions this 14-day cycle — click to cycle desc / asc / reset"
+          >
+            Introductions <em className="sort-icon">{sortIcon('intros')}</em>
+          </th>
         </tr>
       </thead>
       <tbody>
-        {rows.map(({ c, billing, days, intros, target }) => {
+        {sorted.map(({ c, billing, days, intros, target }) => {
           const introsCls =
             intros >= target ? 'bw-done' : intros >= Math.ceil(target / 2) ? 'bw-mid' : 'bw-short';
           return (
