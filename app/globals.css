@@ -384,6 +384,10 @@ td { padding: 13px 16px; font-size: 13px; vertical-align: middle; }
 /* Done summary card accent — match On Track green */
 .n-done .summary-num { color: var(--green); }
 
+/* Interested → Introduction funnel cards */
+.n-converted .summary-num { color: var(--green); }
+.n-conv-rate .summary-num { color: var(--blue); }
+
 .actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; white-space: nowrap; }
 .btn-icon { flex: 0 0 auto; background: none; border: 1px solid var(--border); border-radius: 7px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 13px; color: var(--text-muted); transition: all 0.15s; padding: 0; }
 

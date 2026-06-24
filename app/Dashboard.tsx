@@ -33,8 +33,26 @@ type Filter = 'all' | 'risk' | 'ok' | 'done' | 'active' | 'paused' | 'inactive' 
 
 type PlanFilter = 'all' | 'minimum' | 'production' | 'partner';
 
-type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'today' | 'progress' | 'intros' | 'interested' | 'conv';
+type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'today' | 'progress' | 'intros' | 'interested' | 'conv' | 'converted' | 'convRate';
 type SortBy = null | { col: SortCol; dir: 'desc' | 'asc' };
+
+// Funnel-based conversion helpers. Both Corofy labels are mutually exclusive
+// at any moment (a lead leaves Interested when it becomes Introduction), so:
+//   convertedAllTime    = sum of intros_corofy across all weeks    (already converted)
+//   interestedAllTime   = sum of interested_corofy across all weeks (still in pipeline)
+//   convRate            = converted / (converted + interested) * 100, 0–100%
+function convertedAllTime(c: DashboardClient): number {
+  return Object.values(c.metricsByWeek).reduce((s, m) => s + (m.intros_corofy ?? 0), 0);
+}
+function interestedAllTime(c: DashboardClient): number {
+  return Object.values(c.metricsByWeek).reduce((s, m) => s + (m.interested_corofy ?? 0), 0);
+}
+function convRateFor(c: DashboardClient): number | null {
+  const intros = convertedAllTime(c);
+  const interested = interestedAllTime(c);
+  const total = intros + interested;
+  return total > 0 ? (intros / total) * 100 : null;
+}
 
 type DatePreset = 'last7' | 'last30' | 'ytd' | 'custom' | null;
 
@@ -242,6 +260,20 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         Object.values(c.metricsByWeek).reduce((s, m) => s + (m.interested_corofy ?? 0), 0);
       const mul = sortBy.dir === 'desc' ? 1 : -1;
       list = [...list].sort((a, b) => mul * (sumInterested(b) - sumInterested(a)));
+    } else if (sortBy?.col === 'converted') {
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
+      list = [...list].sort((a, b) => mul * (convertedAllTime(b) - convertedAllTime(a)));
+    } else if (sortBy?.col === 'convRate') {
+      // Clients with no funnel (intros + interested == 0) sink to bottom in both directions.
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
+      list = [...list].sort((a, b) => {
+        const ra = convRateFor(a);
+        const rb = convRateFor(b);
+        if (ra === null && rb === null) return a.name.localeCompare(b.name);
+        if (ra === null) return 1;
+        if (rb === null) return -1;
+        return mul * (rb - ra);
+      });
     } else if (sortBy?.col === 'conv') {
       // Null convPct (client with no emails this week) always sinks to the bottom.
       const mul = sortBy.dir === 'desc' ? 1 : -1;
@@ -307,6 +339,9 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
     const plans = { minimum: 0, production: 0, partner: 0 };
     let convNum = 0;
     let convDen = 0;
+    // Funnel totals (Interested → Introduction). All-time across HISTORICAL_WEEKS.
+    let convertedTotal = 0;
+    let interestedTotal = 0;
     clients.forEach((c) => {
       if (c.hidden) return;
       if (c.client_paused) {
@@ -326,7 +361,12 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         convNum += d.intros;
         convDen += d.emails;
       }
+      for (const m of Object.values(c.metricsByWeek)) {
+        convertedTotal += m.intros_corofy ?? 0;
+        interestedTotal += m.interested_corofy ?? 0;
+      }
     });
+    const totalFunnel = convertedTotal + interestedTotal;
     return {
       total,
       risk,
@@ -340,6 +380,11 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       conv: convDen > 0 ? ((convNum / convDen) * 1000).toFixed(1) + '%' : '—',
       // Raw avg (per-1k units, matches the displayed number) for row color logic.
       convAvg: convDen > 0 ? (convNum / convDen) * 1000 : 0,
+      convertedTotal,
+      convRatePct:
+        totalFunnel > 0
+          ? ((convertedTotal / totalFunnel) * 100).toFixed(1) + '%'
+          : '—',
     };
   }, [clients, key]);
 
@@ -595,6 +640,8 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             sub="across all clients"
           />
           <SummaryCard label="Avg Conv." cls="n-conv" num={summary.conv} sub="1k email → intro" />
+          <SummaryCard label="Converted" cls="n-converted" num={summary.convertedTotal} sub="interested → intro leads" />
+          <SummaryCard label="Int → Intro" cls="n-conv-rate" num={summary.convRatePct} sub="of total funnel" />
         </div>
 
         <div className="table-wrap">
@@ -781,6 +828,20 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       title="Sort by all-time Interested count — click to cycle desc / asc / reset"
                     >
                       Interested <em className="sort-icon">{sortIcon('interested')}</em>
+                    </th>
+                    <th
+                      className={'sortable' + (sortBy?.col === 'converted' ? ' sorted' : '')}
+                      onClick={() => cycleSort('converted')}
+                      title="Sort by Interested → Intro converted count — click to cycle desc / asc / reset"
+                    >
+                      Converted <em className="sort-icon">{sortIcon('converted')}</em>
+                    </th>
+                    <th
+                      className={'sortable' + (sortBy?.col === 'convRate' ? ' sorted' : '')}
+                      onClick={() => cycleSort('convRate')}
+                      title="Sort by Interested → Intro conversion rate — click to cycle desc / asc / reset"
+                    >
+                      Int → Intro <em className="sort-icon">{sortIcon('convRate')}</em>
                     </th>
                     <th>Plan</th>
                     <th>Portal</th>
@@ -1378,6 +1439,25 @@ function ClientRow({
     />
   );
 
+  // Funnel: converted = sum of intros_corofy (every intro was previously interested
+  // — labels are mutually exclusive on Corofy's side). Rate = converted / (converted
+  // + still-interested). Null when no funnel has been entered yet.
+  const convertedCount = Object.values(client.metricsByWeek).reduce(
+    (sum, m) => sum + (m.intros_corofy ?? 0),
+    0,
+  );
+  const totalFunnel = convertedCount + interestedAllTime;
+  const convRatePct = totalFunnel > 0 ? (convertedCount / totalFunnel) * 100 : null;
+  const convertedCell = (
+    <input type="number" readOnly className="metric-input" value={convertedCount} />
+  );
+  const convRateCell =
+    convRatePct === null ? (
+      <span className="api-none">—</span>
+    ) : (
+      <span className="api-num">{convRatePct.toFixed(1)}%</span>
+    );
+
   // conv cell — intros per 1k emails, colored against the dashboard avg
   const convCls = convClassFor(d.convPct, convAvg);
   const convCell =
@@ -1555,6 +1635,8 @@ function ClientRow({
       <td>{lastIntroCell}</td>
       <td>{statusCell}</td>
       <td>{interestedCell}</td>
+      <td>{convertedCell}</td>
+      <td>{convRateCell}</td>
       <td><span className={`plan-badge ${PLAN_BADGE_CLASS[client.plan]}`}>{PLAN_LABEL[client.plan]}</span></td>
       <td>
         {client.portalActive
