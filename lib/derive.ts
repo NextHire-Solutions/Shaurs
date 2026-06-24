@@ -137,7 +137,7 @@ export function derive(c: DashboardClient, weekKey: string): DerivedRow {
   return {
     emails,
     intros,
-    interested: m.interested_corofy,
+    interested: m.interested_corofy ?? 0,
     hasEmails,
     hasIntros,
     metTarget,
