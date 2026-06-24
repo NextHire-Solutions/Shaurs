@@ -235,8 +235,11 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       const mul = sortBy.dir === 'desc' ? 1 : -1;
       list = [...list].sort((a, b) => mul * (derive(b, key).intros - derive(a, key).intros));
     } else if (sortBy?.col === 'interested') {
+      // All-time across the loaded HISTORICAL_WEEKS window — matches the cell display.
+      const sumInterested = (c: DashboardClient) =>
+        Object.values(c.metricsByWeek).reduce((s, m) => s + (m.interested_corofy ?? 0), 0);
       const mul = sortBy.dir === 'desc' ? 1 : -1;
-      list = [...list].sort((a, b) => mul * (derive(b, key).interested - derive(a, key).interested));
+      list = [...list].sort((a, b) => mul * (sumInterested(b) - sumInterested(a)));
     } else if (sortBy?.col === 'conv') {
       // Null convPct (client with no emails this week) always sinks to the bottom.
       const mul = sortBy.dir === 'desc' ? 1 : -1;
@@ -725,7 +728,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       onClick={() => cycleSort('today')}
                       title="Sort by emails sent today (EST) — click to cycle desc / asc / reset"
                     >
-                      Today <em className="sort-icon">{sortIcon('today')}</em>
+                      Daily Emails Sent <em className="sort-icon">{sortIcon('today')}</em>
                     </th>
                     <th
                       className={'sortable' + (sortBy?.col === 'emails' ? ' sorted' : '')}
@@ -740,13 +743,6 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       title="Sort by intros this week — click to cycle desc / asc / reset"
                     >
                       Intros This Week <em className="sort-icon">{sortIcon('intros')}</em>
-                    </th>
-                    <th
-                      className={'sortable' + (sortBy?.col === 'interested' ? ' sorted' : '')}
-                      onClick={() => cycleSort('interested')}
-                      title="Sort by Interested leads this week — click to cycle desc / asc / reset"
-                    >
-                      Interested <em className="sort-icon">{sortIcon('interested')}</em>
                     </th>
                     <th
                       className={'sortable' + (sortBy?.col === 'conv' ? ' sorted' : '')}
@@ -777,6 +773,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       Last Intro <em className="sort-icon">{sortIcon('lastIntro')}</em>
                     </th>
                     <th>Status</th>
+                    <th
+                      className={'sortable' + (sortBy?.col === 'interested' ? ' sorted' : '')}
+                      onClick={() => cycleSort('interested')}
+                      title="Sort by all-time Interested count — click to cycle desc / asc / reset"
+                    >
+                      Interested <em className="sort-icon">{sortIcon('interested')}</em>
+                    </th>
                     <th>Plan</th>
                     <th>Portal</th>
                     <th style={{ textAlign: 'right' }}>Actions</th>
@@ -1264,13 +1267,18 @@ function ClientRow({
     />
   );
 
-  // interested cell — read-only Corofy "Interested" count for this week
+  // interested cell — all-time count across every weekly_metrics row this
+  // client has (sums interested_corofy across the loaded HISTORICAL_WEEKS window).
+  const interestedAllTime = Object.values(client.metricsByWeek).reduce(
+    (sum, m) => sum + (m.interested_corofy ?? 0),
+    0,
+  );
   const interestedCell = (
     <input
       type="number"
       readOnly
       className="metric-input"
-      value={d.interested}
+      value={interestedAllTime}
     />
   );
 
@@ -1445,12 +1453,12 @@ function ClientRow({
       <td>{todayCell}</td>
       <td>{emailsCell}</td>
       <td>{introsCell}</td>
-      <td>{interestedCell}</td>
       <td>{convCell}</td>
       <td>{leftCell}</td>
       <td>{campaignCell}</td>
       <td>{lastIntroCell}</td>
       <td>{statusCell}</td>
+      <td>{interestedCell}</td>
       <td><span className={`plan-badge ${PLAN_BADGE_CLASS[client.plan]}`}>{PLAN_LABEL[client.plan]}</span></td>
       <td>
         {client.portalActive
