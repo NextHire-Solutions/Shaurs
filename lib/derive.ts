@@ -116,9 +116,20 @@ export function derive(c: DashboardClient, weekKey: string): DerivedRow {
 
   const leftThisWeek = Math.max(0, c.weekly_target - intros);
 
-  const campaignsAvgPct = c.campaigns.length > 0
-    ? c.campaigns.reduce((a, b) => a + (b.progress_pct || 0), 0) / c.campaigns.length
-    : 0;
+  // Match the displayed Campaign Progress cell exactly: weighted average
+  // across ACTIVE (running) campaigns only, union of Instantly + Bison.
+  // Σ(completed leads) / Σ(total leads) × 100. Returns 0 when no running
+  // campaign so those rows sink to the bottom of a descending sort.
+  const runningAll = [
+    ...c.campaigns.filter((x) => x.status === 'running'),
+    ...c.bisonCampaigns.filter((x) => x.status === 'running'),
+  ];
+  const cpTotal = runningAll.reduce((a, b) => a + b.campaign_size, 0);
+  const cpCompleted = runningAll.reduce(
+    (a, b) => a + Math.round(b.campaign_size * (b.progress_pct / 100)),
+    0,
+  );
+  const campaignsAvgPct = cpTotal > 0 ? (cpCompleted / cpTotal) * 100 : 0;
 
   return {
     emails,
