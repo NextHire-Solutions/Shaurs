@@ -32,15 +32,19 @@ interface CorofyIntrosResp {
   intros: CorofyIntro[];
 }
 
-export async function listCorofyIntros(): Promise<CorofyIntro[]> {
+// Defaults to "Introduction" (no label query param) for back-compat. Pass
+// 'Interested' to pull the Interested-tagged leads instead.
+export async function listCorofyIntros(label?: 'Introduction' | 'Interested'): Promise<CorofyIntro[]> {
   if (!BASE) throw new Error('COROFY_BASE_URL is not set');
-  const res = await fetch(`${BASE}/api/clients/intros`, {
+  const url = new URL(`${BASE}/api/clients/intros`);
+  if (label) url.searchParams.set('label', label);
+  const res = await fetch(url.toString(), {
     headers: { 'x-admin-token': token(), Accept: 'application/json' },
     cache: 'no-store',
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`Corofy /api/clients/intros ${res.status}: ${body.slice(0, 200)}`);
+    throw new Error(`Corofy /api/clients/intros${label ? `?label=${label}` : ''} ${res.status}: ${body.slice(0, 200)}`);
   }
   const json = (await res.json()) as CorofyIntrosResp;
   return json.intros ?? [];

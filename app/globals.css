@@ -328,9 +328,32 @@ td { padding: 13px 16px; font-size: 13px; vertical-align: middle; }
 
 .last-intro { font-size: 13px; font-weight: 700; white-space: nowrap; }
 .li-fresh  { color: var(--green); }
-.li-recent { color: var(--yellow); }
-.li-stale  { color: var(--red); }
+.li-recent { color: var(--yellow); }       /* unused after 5-day rule */
+.li-stale  { color: var(--red); }          /* unused after 5-day rule */
+.li-stale-orange {
+  color: var(--yellow);
+  background: var(--yellow-bg);
+  border: 1px solid var(--yellow-border);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 12px;
+}
 .li-none   { color: var(--text-muted); font-weight: 400; font-size: 12px; }
+
+/* Client search input — sits at the start of the filter pills row */
+.client-search {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--text);
+  min-width: 180px;
+  transition: border-color 0.15s;
+}
+.client-search:focus { outline: none; border-color: var(--blue); }
+.client-search::placeholder { color: var(--text-muted); }
 
 .status-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
 .status-dot   { width: 5px; height: 5px; border-radius: 50%; }

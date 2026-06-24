@@ -26,7 +26,7 @@ type Filter = 'all' | 'risk' | 'ok' | 'done' | 'active' | 'paused' | 'inactive' 
 
 type PlanFilter = 'all' | 'minimum' | 'production' | 'partner';
 
-type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'progress';
+type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'progress' | 'intros' | 'interested' | 'conv';
 type SortBy = null | { col: SortCol; dir: 'desc' | 'asc' };
 
 type DatePreset = 'last7' | 'last30' | 'ytd' | 'custom' | null;
@@ -92,6 +92,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
   const [dateRange, setDateRange] = useState<{ from: string | null; to: string | null }>({ from: null, to: null });
   const [datePreset, setDatePreset] = useState<DatePreset>(null);
   const [datePopoverOpen, setDatePopoverOpen] = useState(false);
+  const [search, setSearch] = useState('');
   const [campaignSelections, setCampaignSelections] = useState<Record<string, string>>({});
   const [campaignsPopupClientId, setCampaignsPopupClientId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -159,6 +160,9 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
           return true;
       }
     });
+    // Free-text search by client name (case-insensitive substring).
+    const q = search.trim().toLowerCase();
+    if (q) list = list.filter((c) => c.name.toLowerCase().includes(q));
     // Plan filter (orthogonal to the other filter pills).
     if (planFilter !== 'all') {
       list = list.filter((c) => c.plan === planFilter);
@@ -208,9 +212,26 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
     } else if (sortBy?.col === 'progress') {
       const mul = sortBy.dir === 'desc' ? 1 : -1;
       list = [...list].sort((a, b) => mul * (derive(b, key).campaignsAvgPct - derive(a, key).campaignsAvgPct));
+    } else if (sortBy?.col === 'intros') {
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
+      list = [...list].sort((a, b) => mul * (derive(b, key).intros - derive(a, key).intros));
+    } else if (sortBy?.col === 'interested') {
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
+      list = [...list].sort((a, b) => mul * (derive(b, key).interested - derive(a, key).interested));
+    } else if (sortBy?.col === 'conv') {
+      // Null convPct (client with no emails this week) always sinks to the bottom.
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
+      list = [...list].sort((a, b) => {
+        const ap = derive(a, key).convPct;
+        const bp = derive(b, key).convPct;
+        if (ap === null && bp === null) return a.name.localeCompare(b.name);
+        if (ap === null) return 1;
+        if (bp === null) return -1;
+        return mul * (bp - ap);
+      });
     }
     return list;
-  }, [clients, filter, planFilter, sortBy, dateRange, key]);
+  }, [clients, filter, planFilter, sortBy, dateRange, search, key]);
 
   // 1st click = desc (highest first), 2nd = asc, 3rd = reset.
   function cycleSort(col: SortCol) {
@@ -555,6 +576,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               </div>
             </div>
             <div className="filter-pills">
+              <input
+                type="search"
+                className="client-search"
+                placeholder="Search clients…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
               <button className={'fpill' + (filter === 'all' ? ' active' : '')} onClick={() => setFilter('all')}>All</button>
               <button className={'fpill f-risk' + (filter === 'risk' ? ' active' : '')} onClick={() => setFilter('risk')}>At Risk</button>
               <button className={'fpill f-ok' + (filter === 'ok' ? ' active' : '')} onClick={() => setFilter('ok')}>On Track</button>
@@ -667,8 +695,27 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                     >
                       Emails Sent <em className="sort-icon">{sortIcon('emails')}</em>
                     </th>
-                    <th>Intros This Week</th>
-                    <th>Conv. Rate</th>
+                    <th
+                      className={'sortable' + (sortBy?.col === 'intros' ? ' sorted' : '')}
+                      onClick={() => cycleSort('intros')}
+                      title="Sort by intros this week — click to cycle desc / asc / reset"
+                    >
+                      Intros This Week <em className="sort-icon">{sortIcon('intros')}</em>
+                    </th>
+                    <th
+                      className={'sortable' + (sortBy?.col === 'interested' ? ' sorted' : '')}
+                      onClick={() => cycleSort('interested')}
+                      title="Sort by Interested leads this week — click to cycle desc / asc / reset"
+                    >
+                      Interested <em className="sort-icon">{sortIcon('interested')}</em>
+                    </th>
+                    <th
+                      className={'sortable' + (sortBy?.col === 'conv' ? ' sorted' : '')}
+                      onClick={() => cycleSort('conv')}
+                      title="Sort by conversion rate — click to cycle desc / asc / reset"
+                    >
+                      Conv. Rate <em className="sort-icon">{sortIcon('conv')}</em>
+                    </th>
                     <th
                       className={'sortable' + (sortBy?.col === 'leftWeek' ? ' sorted' : '')}
                       onClick={() => cycleSort('leftWeek')}
@@ -1072,6 +1119,16 @@ function ClientRow({
     />
   );
 
+  // interested cell — read-only Corofy "Interested" count for this week
+  const interestedCell = (
+    <input
+      type="number"
+      readOnly
+      className="metric-input"
+      value={d.interested}
+    />
+  );
+
   // conv cell — intros per 1k emails, colored against the dashboard avg
   const convCls = convClassFor(d.convPct, convAvg);
   const convCell =
@@ -1170,6 +1227,7 @@ function ClientRow({
   }
 
   // last intro cell
+  // 2-bucket coloring: 0-5 days = green, > 5 = orange.
   let lastIntroCell: React.ReactNode;
   if (d.daysSince === null) {
     lastIntroCell = <span className="last-intro li-none">No data</span>;
@@ -1177,12 +1235,10 @@ function ClientRow({
     lastIntroCell = <span className="last-intro li-fresh">Today</span>;
   } else if (d.daysSince === 1) {
     lastIntroCell = <span className="last-intro li-fresh">Yesterday</span>;
-  } else if (d.daysSince <= 7) {
+  } else if (d.daysSince <= 5) {
     lastIntroCell = <span className="last-intro li-fresh">{d.daysSince}d ago</span>;
-  } else if (d.daysSince <= 14) {
-    lastIntroCell = <span className="last-intro li-recent">{d.daysSince}d ago</span>;
   } else {
-    lastIntroCell = <span className="last-intro li-stale">{d.daysSince}d ago</span>;
+    lastIntroCell = <span className="last-intro li-stale-orange">{d.daysSince}d ago</span>;
   }
 
   // Per spec, the dashboard only counts ACTIVE campaigns under each client.
@@ -1243,6 +1299,7 @@ function ClientRow({
       </td>
       <td>{emailsCell}</td>
       <td>{introsCell}</td>
+      <td>{interestedCell}</td>
       <td>{convCell}</td>
       <td>{leftCell}</td>
       <td>{campaignCell}</td>

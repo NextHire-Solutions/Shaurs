@@ -4,6 +4,8 @@ const EMPTY_METRIC: Omit<WeeklyMetric, 'client_id' | 'week_key'> = {
   emails_sent: 0,
   intros_corofy: 0,
   last_corofy_intro_at: null,
+  interested_corofy: 0,
+  last_interested_at: null,
 };
 
 export function metricFor(c: DashboardClient, weekKey: string): WeeklyMetric {
@@ -77,6 +79,7 @@ export function daysSinceLastIntro(lastIntroAt: string | null | undefined): numb
 export interface DerivedRow {
   emails: number;
   intros: number;
+  interested: number; // Corofy "Interested" count for the visible week
   hasEmails: boolean;
   hasIntros: boolean;
   metTarget: boolean;
@@ -134,6 +137,7 @@ export function derive(c: DashboardClient, weekKey: string): DerivedRow {
   return {
     emails,
     intros,
+    interested: m.interested_corofy,
     hasEmails,
     hasIntros,
     metTarget,

@@ -32,6 +32,7 @@ interface SyncResult {
     ok: boolean;
     error?: string;
     intros?: number;
+    interested?: number;     // count of "Interested"-labeled rows fetched
     skipped?: boolean;
     unmatched?: string[];
     portalsMatched?: number; // # clients flipped to portal_active=true
@@ -481,6 +482,64 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
       );
     }
 
+    // Now do the same thing for the "Interested" label and write
+    // interested_corofy / last_interested_at on the same weekly_metrics rows.
+    // Failures here are non-fatal: log and continue (Introduction data already
+    // written; portal sync still runs).
+    let interestedTotal = 0;
+    try {
+      const interestedRows = await listCorofyIntros('Interested');
+      interestedTotal = interestedRows.length;
+      const byNameWeekI = new Map<string, { count: number; latest: number }>();
+      const allTimeLatestI = new Map<string, number>();
+      for (const i of interestedRows) {
+        const t = new Date(i.assigned_at).getTime();
+        if (!Number.isFinite(t)) continue;
+        const normKey = normalizeName(i.client_name);
+        if ((allTimeLatestI.get(normKey) ?? 0) < t) allTimeLatestI.set(normKey, t);
+        const wk = weekKey(new Date(t));
+        if (!validWeekSet.has(wk)) continue;
+        const k = `${normKey}|${wk}`;
+        const cur = byNameWeekI.get(k) ?? { count: 0, latest: 0 };
+        cur.count++;
+        if (t > cur.latest) cur.latest = t;
+        byNameWeekI.set(k, cur);
+      }
+      if (clients) {
+        const interestedUpserts: {
+          client_id: string;
+          week_key: string;
+          interested_corofy: number;
+          last_interested_at: string | null;
+        }[] = [];
+        for (const c of clients as { id: string; name: string }[]) {
+          const normKey = normalizeName(c.name);
+          const allTime = allTimeLatestI.get(normKey) ?? 0;
+          for (const wk of mondayKeys) {
+            const stats = byNameWeekI.get(`${normKey}|${wk}`);
+            const count = stats?.count ?? 0;
+            const latest = stats?.latest ?? 0;
+            const ts = latest > 0 ? latest : allTime;
+            interestedUpserts.push({
+              client_id: c.id,
+              week_key: wk,
+              interested_corofy: count,
+              last_interested_at: ts > 0 ? new Date(ts).toISOString() : null,
+            });
+          }
+        }
+        if (interestedUpserts.length > 0) {
+          const { error } = await sb
+            .from('weekly_metrics')
+            .upsert(interestedUpserts, { onConflict: 'client_id,week_key', ignoreDuplicates: false });
+          if (error) console.warn(`[corofy] interested upsert failed: ${error.message}`);
+        }
+      }
+      console.warn(`[corofy] Interested rows bucketed: ${interestedTotal}`);
+    } catch (e) {
+      console.warn(`[corofy] Interested fetch failed: ${(e as Error).message}`);
+    }
+
     // Piggyback portal sync on the same cron tick. Corofy's /api/clients/portals
     // is only reachable from sync-worker's Railway edge (the web service gets
     // 307 → /login), so we fetch + persist here. Failures are non-fatal: we
@@ -532,6 +591,7 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
     return {
       ok: true,
       intros: intros.length,
+      interested: interestedTotal,
       unmatched: unmatched.length > 0 ? unmatched : undefined,
       portalsMatched,
     };
