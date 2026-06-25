@@ -28,6 +28,7 @@ interface ClientRow {
   portal_active: boolean;
   billing_anchor_date: string | null;
   billing_interval: BillingInterval | null;
+  billing_interval_days: number | null;
   emails_today: number | null;
   emails_today_date: string | null;
 }
@@ -118,6 +119,7 @@ export async function loadDashboardClients(): Promise<{
       portal_active: c.portal_active ?? false,
       billing_anchor_date: c.billing_anchor_date ?? null,
       billing_interval: c.billing_interval ?? 'biweekly',
+      billing_interval_days: c.billing_interval_days ?? null,
       emails_today: c.emails_today ?? 0,
       emails_today_date: c.emails_today_date ?? null,
       campaigns: linkedCampaigns,

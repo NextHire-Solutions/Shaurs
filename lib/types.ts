@@ -28,12 +28,13 @@ export interface BisonCampaign {
   interested_count: number;  // Corofy "Interested" labels attributed to this campaign
 }
 
-export type BillingInterval = 'biweekly' | '28-days' | 'monthly';
+export type BillingInterval = 'biweekly' | '28-days' | 'monthly' | 'custom';
 
 export const BILLING_INTERVAL_LABEL: Record<BillingInterval, string> = {
   biweekly: 'Bi-weekly (14 days)',
   '28-days': 'Every 28 days',
   monthly: 'Monthly',
+  custom: 'Custom (every N days)',
 };
 
 // Per-plan biweekly introduction targets. Applied uniformly regardless of
@@ -58,6 +59,7 @@ export interface Client {
   portal_active: boolean; // synced from Corofy /api/clients/portals by sync-worker
   billing_anchor_date: string | null; // ISO date, anchor for billing cycle math
   billing_interval: BillingInterval;
+  billing_interval_days: number | null; // only meaningful when billing_interval='custom'
   emails_today: number;               // today's emails sent (EST)
   emails_today_date: string | null;   // YYYY-MM-DD the emails_today value is for (EST)
 }

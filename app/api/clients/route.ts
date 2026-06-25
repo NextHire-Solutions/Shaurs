@@ -26,6 +26,7 @@ export async function POST(req: NextRequest) {
       campaign_size: body.campaign_size ?? 0,
       billing_anchor_date: body.billing_anchor_date ?? null,
       billing_interval: body.billing_interval ?? 'biweekly',
+      billing_interval_days: body.billing_interval_days ?? null,
     })
     .select()
     .single();
@@ -52,6 +53,7 @@ export async function PATCH(req: NextRequest) {
   if (body.portal_active !== undefined) update.portal_active = body.portal_active;
   if (body.billing_anchor_date !== undefined) update.billing_anchor_date = body.billing_anchor_date;
   if (body.billing_interval !== undefined) update.billing_interval = body.billing_interval;
+  if (body.billing_interval_days !== undefined) update.billing_interval_days = body.billing_interval_days;
   const { data, error } = await sb
     .from('clients')
     .update(update)

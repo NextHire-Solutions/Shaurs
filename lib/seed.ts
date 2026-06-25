@@ -29,6 +29,7 @@ export function generateSeed(): DashboardClient[] {
     | 'portalActive'
     | 'billing_anchor_date'
     | 'billing_interval'
+    | 'billing_interval_days'
     | 'emails_today'
     | 'emails_today_date'
     | 'campaigns'
@@ -169,6 +170,7 @@ export function generateSeed(): DashboardClient[] {
     portalActive: false,
     billing_anchor_date: null,
     billing_interval: 'biweekly' as const,
+    billing_interval_days: null,
     emails_today: 0,
     emails_today_date: null,
     // Fill reply_count + interested_count on every nested campaign so they

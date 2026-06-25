@@ -71,17 +71,26 @@ export function todayInET(now = new Date()): string {
 }
 
 // Compute the NEXT billing date based on anchor + interval. Returns null when
-// no anchor is provided (caller is expected to fall back to start_date).
+// no anchor is provided (caller is expected to fall back to start_date), or
+// when interval='custom' but no positive day count is configured yet.
 export function nextBillingDate(
   anchorISO: string | null,
   interval: BillingInterval,
   today: Date = new Date(),
+  customDays: number | null = null,
 ): Date | null {
   if (!anchorISO) return null;
   const anchor = asUTC(anchorISO);
   if (anchor.getTime() > today.getTime()) return anchor;
-  if (interval === 'biweekly' || interval === '28-days') {
-    const step = interval === 'biweekly' ? 14 : 28;
+  // N-day intervals — 14, 28, or custom-N.
+  let step: number | null = null;
+  if (interval === 'biweekly') step = 14;
+  else if (interval === '28-days') step = 28;
+  else if (interval === 'custom') {
+    step = customDays && customDays > 0 ? Math.floor(customDays) : null;
+    if (step === null) return null;
+  }
+  if (step !== null) {
     const daysSince = Math.floor((today.getTime() - anchor.getTime()) / 86400000);
     const cyclesSince = Math.max(1, Math.ceil(daysSince / step));
     return addDays(anchor, cyclesSince * step);

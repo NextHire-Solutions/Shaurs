@@ -87,6 +87,9 @@ interface ModalState {
   weeklyTarget: number;
   billingAnchorDate: string;
   billingInterval: BillingInterval;
+  // Free-text string while editing — parsed to int on save. Empty string
+  // is allowed (the Custom option just won't compute a next billing date).
+  billingIntervalDays: string;
 }
 
 const emptyModal: ModalState = {
@@ -98,6 +101,7 @@ const emptyModal: ModalState = {
   weeklyTarget: PLAN_DEFAULT_TARGET.production,
   billingAnchorDate: '',
   billingInterval: 'biweekly',
+  billingIntervalDays: '',
 };
 
 // User-local "today" as YYYY-MM-DD. new Date().toISOString() returns UTC,
@@ -413,6 +417,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       weeklyTarget: c.weekly_target,
       billingAnchorDate: c.billing_anchor_date ?? '',
       billingInterval: c.billing_interval ?? 'biweekly',
+      billingIntervalDays: c.billing_interval_days != null ? String(c.billing_interval_days) : '',
     });
   }
 
@@ -428,6 +433,14 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
     // the seed script + auto-relink step in the sync worker.
     const linkedIds = autoMatchCampaignIds(name, allInstantlyCampaigns);
     const linkedBisonIds = autoMatchCampaignIds(name, allBisonCampaigns);
+    // Custom interval only — parse the typed days field into an int. Any
+    // non-positive / non-numeric value falls back to null (server treats as
+    // "no custom cadence set yet", and the billing-date helper returns null).
+    let billingIntervalDays: number | null = null;
+    if (modal.billingInterval === 'custom') {
+      const parsed = parseInt(modal.billingIntervalDays, 10);
+      if (Number.isFinite(parsed) && parsed > 0) billingIntervalDays = parsed;
+    }
     const payload = {
       name,
       plan: modal.plan,
@@ -437,6 +450,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       bison_campaign_ids: linkedBisonIds,
       billing_anchor_date: modal.billingAnchorDate || null,
       billing_interval: modal.billingInterval,
+      billing_interval_days: billingIntervalDays,
     };
     try {
       if (modal.editingId) {
@@ -964,7 +978,23 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               <option value="biweekly">{BILLING_INTERVAL_LABEL.biweekly}</option>
               <option value="28-days">{BILLING_INTERVAL_LABEL['28-days']}</option>
               <option value="monthly">{BILLING_INTERVAL_LABEL.monthly}</option>
+              <option value="custom">{BILLING_INTERVAL_LABEL.custom}</option>
             </select>
+            {modal.billingInterval === 'custom' && (
+              <div className="custom-days-row">
+                <span>Every</span>
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  placeholder="e.g. 21"
+                  className="custom-days-input"
+                  value={modal.billingIntervalDays}
+                  onChange={(e) => setModal((m) => ({ ...m, billingIntervalDays: e.target.value }))}
+                />
+                <span>days</span>
+              </div>
+            )}
           </div>
 
 
@@ -1222,7 +1252,7 @@ function BiWeeklyTable({
   }
   const rows = clients.map((c) => {
     const anchor = c.billing_anchor_date ?? c.start_date;
-    const billing = nextBillingDate(anchor, c.billing_interval, today);
+    const billing = nextBillingDate(anchor, c.billing_interval, today, c.billing_interval_days);
     const days = billing ? daysUntil(billing, today) : null;
     const intros = biweeklyIntros(c.metricsByWeek, today);
     const target = BIWEEKLY_TARGET[c.plan];
