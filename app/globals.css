@@ -61,7 +61,7 @@ main { max-width: 1400px; margin: 0 auto; padding: 28px 24px; }
 .summary-sub   { font-size: 11px; color: var(--text-muted); }
 .n-total  { color: var(--text); }
 .n-risk   { color: var(--red); }
-.n-ok     { color: var(--green); }
+.n-ok     { color: var(--yellow); }
 .n-intros { color: var(--blue); }
 .n-emails { color: var(--text-muted); }
 .n-conv   { color: var(--yellow); }
@@ -77,7 +77,7 @@ main { max-width: 1400px; margin: 0 auto; padding: 28px 24px; }
 .fpill:hover { color: var(--text); background: var(--white); }
 .fpill.active { background: var(--white); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
 .fpill.active.f-risk { color: var(--red); }
-.fpill.active.f-ok   { color: var(--green); }
+.fpill.active.f-ok   { color: var(--yellow); }
 
 .table-scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; min-width: 1080px; }
@@ -371,8 +371,8 @@ td { padding: 13px 16px; font-size: 13px; vertical-align: middle; }
 .status-dot   { width: 5px; height: 5px; border-radius: 50%; }
 .s-risk    { background: var(--red-bg);    border: 1px solid var(--red-border);    color: var(--red); }
 .s-risk    .status-dot { background: var(--red); }
-.s-ok      { background: var(--green-bg);  border: 1px solid var(--green-border);  color: var(--green); }
-.s-ok      .status-dot { background: var(--green); }
+.s-ok      { background: var(--yellow-bg); border: 1px solid var(--yellow-border); color: var(--yellow); }
+.s-ok      .status-dot { background: var(--yellow); }
 .s-pending { background: var(--yellow-bg); border: 1px solid var(--yellow-border); color: var(--yellow); }
 .s-pending .status-dot { background: var(--yellow); }
 .s-done    { background: var(--green-bg);  border: 1px solid var(--green-border);  color: var(--green); }
