@@ -392,6 +392,39 @@ td { padding: 13px 16px; font-size: 13px; vertical-align: middle; }
 .custom-days-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 13px; color: var(--text-muted); }
 .custom-days-input { width: 80px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; font-weight: 600; }
 
+/* Client Success tab — health/relationship view */
+.cs-table .cs-num { text-align: right; }
+.cs-tz {
+  display: inline-block;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--blue-pale);
+  color: var(--blue);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+}
+.cs-date  { font-variant-numeric: tabular-nums; color: var(--text); }
+.cs-count { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--text); }
+.cs-muted { color: var(--text-muted); font-size: 13px; }
+.cs-none  { color: var(--text-muted); }
+.cs-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.cs-pill-dot { width: 6px; height: 6px; border-radius: 50%; }
+.cs-pill-good { background: var(--green-bg);  border-color: var(--green-border);  color: var(--green); }
+.cs-pill-good .cs-pill-dot { background: var(--green); }
+.cs-pill-warn { background: var(--yellow-bg); border-color: var(--yellow-border); color: var(--yellow); }
+.cs-pill-warn .cs-pill-dot { background: var(--yellow); }
+
 .actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; white-space: nowrap; }
 .btn-icon { flex: 0 0 auto; background: none; border: 1px solid var(--border); border-radius: 7px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 13px; color: var(--text-muted); transition: all 0.15s; padding: 0; }
 

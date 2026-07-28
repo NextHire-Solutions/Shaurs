@@ -54,6 +54,7 @@ export async function PATCH(req: NextRequest) {
   if (body.billing_anchor_date !== undefined) update.billing_anchor_date = body.billing_anchor_date;
   if (body.billing_interval !== undefined) update.billing_interval = body.billing_interval;
   if (body.billing_interval_days !== undefined) update.billing_interval_days = body.billing_interval_days;
+  if (body.time_zone !== undefined) update.time_zone = body.time_zone;
   const { data, error } = await sb
     .from('clients')
     .update(update)

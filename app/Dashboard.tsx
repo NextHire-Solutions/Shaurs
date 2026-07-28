@@ -21,6 +21,8 @@ import {
   PLAN_BADGE_CLASS,
   PLAN_DEFAULT_TARGET,
   PLAN_LABEL,
+  TIME_ZONES,
+  TZ_SHORT_BY_VALUE,
   type BillingInterval,
   type BisonCampaign,
   type CampaignSource,
@@ -90,6 +92,8 @@ interface ModalState {
   // Free-text string while editing — parsed to int on save. Empty string
   // is allowed (the Custom option just won't compute a next billing date).
   billingIntervalDays: string;
+  // IANA time-zone string from TIME_ZONES, or '' for none-selected.
+  timeZone: string;
 }
 
 const emptyModal: ModalState = {
@@ -102,6 +106,7 @@ const emptyModal: ModalState = {
   billingAnchorDate: '',
   billingInterval: 'biweekly',
   billingIntervalDays: '',
+  timeZone: '',
 };
 
 // User-local "today" as YYYY-MM-DD. new Date().toISOString() returns UTC,
@@ -128,7 +133,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
   const [datePreset, setDatePreset] = useState<DatePreset>(null);
   const [datePopoverOpen, setDatePopoverOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [view, setView] = useState<'weekly' | 'biweekly'>('weekly');
+  const [view, setView] = useState<'weekly' | 'biweekly' | 'success'>('weekly');
   const [campaignSelections, setCampaignSelections] = useState<Record<string, string>>({});
   const [campaignsPopupClientId, setCampaignsPopupClientId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -418,6 +423,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       billingAnchorDate: c.billing_anchor_date ?? '',
       billingInterval: c.billing_interval ?? 'biweekly',
       billingIntervalDays: c.billing_interval_days != null ? String(c.billing_interval_days) : '',
+      timeZone: c.time_zone ?? '',
     });
   }
 
@@ -451,6 +457,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       billing_anchor_date: modal.billingAnchorDate || null,
       billing_interval: modal.billingInterval,
       billing_interval_days: billingIntervalDays,
+      time_zone: modal.timeZone || null,
     };
     try {
       if (modal.editingId) {
@@ -483,6 +490,9 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             portal_active: false,
             emails_today: 0,
             emails_today_date: null,
+            portal_synced_at: null,
+            dnc_count: 0,
+            agents_count: 0,
             campaigns: [],
             bisonCampaigns: [],
             metricsByWeek: {},
@@ -669,6 +679,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                 <span className="view-toggle-label">View as:</span>
                 <button className={view === 'weekly' ? 'active' : ''} onClick={() => setView('weekly')}>Weekly</button>
                 <button className={view === 'biweekly' ? 'active' : ''} onClick={() => setView('biweekly')}>Bi-Weekly</button>
+                <button className={view === 'success' ? 'active' : ''} onClick={() => setView('success')}>Client Success</button>
               </div>
             </div>
             <div className="filter-pills">
@@ -775,6 +786,8 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               </div>
             ) : view === 'biweekly' ? (
               <BiWeeklyTable clients={visible} onEditClient={openEditModal} />
+            ) : view === 'success' ? (
+              <ClientSuccessTable clients={visible} onEditClient={openEditModal} />
             ) : (
               <table>
                 <thead>
@@ -995,6 +1008,20 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                 <span>days</span>
               </div>
             )}
+          </div>
+
+          <div className="form-group">
+            <label>Time Zone</label>
+            <select
+              value={modal.timeZone}
+              onChange={(e) => setModal((m) => ({ ...m, timeZone: e.target.value }))}
+            >
+              <option value="">— None —</option>
+              {TIME_ZONES.map((tz) => (
+                <option key={tz.value} value={tz.value}>{tz.label}</option>
+              ))}
+            </select>
+            <div className="form-help">Shown as a short code (ET, PT, …) in the Client Success view.</div>
           </div>
 
 
@@ -1355,6 +1382,247 @@ function BiWeeklyTable({
               </td>
               <td>
                 <span className={introsCls}>{intros}/{target}</span>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+// Client Success tab — health / relationship view. Independent of the
+// Weekly / Bi-Weekly throughput lens.
+//
+// Columns:
+//   Client | Plan | Time Zone | Launch Date | Portal Updated | Intro Stage
+//   | Hired | Last Hire | DNC | Agents
+//
+// All values come from data we already store on `clients` or the union of
+// weekly_metrics rows, except:
+//   - Intro Stage — derived from the newest last_corofy_intro_at across the
+//     26-week window; > STALE_INTRO_DAYS old → "Not Updated"
+//   - Hired / Last Hire — 0 / "—" until Corofy exposes the "Hired" label
+//     (the sync-worker call is non-fatal until then).
+const STALE_INTRO_DAYS = 7;
+
+type CsSortCol =
+  | 'name' | 'plan' | 'tz' | 'launch' | 'portal' | 'stage'
+  | 'hired' | 'lastHire' | 'dnc' | 'agents';
+type CsSortBy = null | { col: CsSortCol; dir: 'desc' | 'asc' };
+
+// "5 min ago" / "2h ago" / "3d ago" / "—" — used for both portal_synced_at
+// and last_hired_at cells so cadence reads consistently across the row.
+function humanizeAgo(iso: string | null | undefined, now: number = Date.now()): string {
+  if (!iso) return '—';
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return '—';
+  const s = Math.max(0, Math.floor((now - t) / 1000));
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  const d = Math.floor(s / 86400);
+  if (d === 1) return 'Yesterday';
+  if (d < 30) return `${d}d ago`;
+  const months = Math.floor(d / 30);
+  if (months < 12) return `${months}mo ago`;
+  return `${Math.floor(months / 12)}y ago`;
+}
+
+function fmtISODateShort(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return '—';
+  const d = new Date(t);
+  return `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}/${d.getUTCFullYear()}`;
+}
+
+function ClientSuccessTable({
+  clients,
+  onEditClient,
+}: {
+  clients: DashboardClient[];
+  onEditClient: (c: DashboardClient) => void;
+}) {
+  const now = Date.now();
+  const [sortBy, setSortBy] = useState<CsSortBy>(null);
+  function cycleSort(col: CsSortCol) {
+    setSortBy((cur) => {
+      if (!cur || cur.col !== col) return { col, dir: 'desc' };
+      if (cur.dir === 'desc') return { col, dir: 'asc' };
+      return null;
+    });
+  }
+  function sortIcon(col: CsSortCol): string {
+    if (sortBy?.col !== col) return '↕';
+    return sortBy.dir === 'desc' ? '↓' : '↑';
+  }
+
+  const rows = clients.map((c) => {
+    // Newest last_corofy_intro_at across the client's whole metrics window.
+    let lastIntroMs = 0;
+    let lastHireMs = 0;
+    let hiredTotal = 0;
+    for (const m of Object.values(c.metricsByWeek)) {
+      if (m.last_corofy_intro_at) {
+        const t = new Date(m.last_corofy_intro_at).getTime();
+        if (Number.isFinite(t) && t > lastIntroMs) lastIntroMs = t;
+      }
+      if (m.last_hired_at) {
+        const t = new Date(m.last_hired_at).getTime();
+        if (Number.isFinite(t) && t > lastHireMs) lastHireMs = t;
+      }
+      hiredTotal += m.hired_corofy ?? 0;
+    }
+    const staleDays = lastIntroMs === 0
+      ? Number.POSITIVE_INFINITY
+      : Math.floor((now - lastIntroMs) / 86400000);
+    const staleIntro = staleDays > STALE_INTRO_DAYS;
+    return {
+      c,
+      lastIntroAt: lastIntroMs > 0 ? new Date(lastIntroMs).toISOString() : null,
+      staleIntro,
+      hiredTotal,
+      lastHireAt: lastHireMs > 0 ? new Date(lastHireMs).toISOString() : null,
+    };
+  });
+  type Row = (typeof rows)[number];
+  const defaultCmp = (a: Row, b: Row) => a.c.name.localeCompare(b.c.name);
+  let sorted: Row[];
+  if (!sortBy) {
+    sorted = [...rows].sort(defaultCmp);
+  } else {
+    const mul = sortBy.dir === 'desc' ? 1 : -1;
+    // Returns 0 when both sides are missing so the `|| nameCmp` fallback fires.
+    const strCmp = (av: string | null | undefined, bv: string | null | undefined) => {
+      if (!av && !bv) return 0;
+      if (!av) return 1;
+      if (!bv) return -1;
+      return -mul * av.localeCompare(bv);
+    };
+    const numCmp = (av: number, bv: number) => mul * (bv - av);
+    const dateCmp = (av: string | null | undefined, bv: string | null | undefined) => {
+      const at = av ? new Date(av).getTime() : 0;
+      const bt = bv ? new Date(bv).getTime() : 0;
+      if (at === 0 && bt === 0) return 0;
+      if (at === 0) return 1;
+      if (bt === 0) return -1;
+      return mul * (bt - at);
+    };
+    sorted = [...rows].sort((a, b) => {
+      switch (sortBy.col) {
+        case 'name':    return -mul * a.c.name.localeCompare(b.c.name);
+        case 'plan':    return -mul * a.c.plan.localeCompare(b.c.plan);
+        case 'tz':      return strCmp(a.c.time_zone, b.c.time_zone) || a.c.name.localeCompare(b.c.name);
+        case 'launch':  return dateCmp(a.c.start_date, b.c.start_date) || a.c.name.localeCompare(b.c.name);
+        case 'portal':  return dateCmp(a.c.portal_synced_at, b.c.portal_synced_at) || a.c.name.localeCompare(b.c.name);
+        case 'stage':   {
+          // "Current" (not stale) ranks BEFORE "Not Updated" on desc, after on asc.
+          const av = a.staleIntro ? 1 : 0;
+          const bv = b.staleIntro ? 1 : 0;
+          if (av !== bv) return mul * (bv - av);
+          return a.c.name.localeCompare(b.c.name);
+        }
+        case 'hired':    return numCmp(a.hiredTotal, b.hiredTotal) || a.c.name.localeCompare(b.c.name);
+        case 'lastHire': return dateCmp(a.lastHireAt, b.lastHireAt) || a.c.name.localeCompare(b.c.name);
+        case 'dnc':      return numCmp(a.c.dnc_count, b.c.dnc_count) || a.c.name.localeCompare(b.c.name);
+        case 'agents':   return numCmp(a.c.agents_count, b.c.agents_count) || a.c.name.localeCompare(b.c.name);
+        default: return 0;
+      }
+    });
+  }
+
+  return (
+    <table className="cs-table">
+      <thead>
+        <tr>
+          <th className={'sortable' + (sortBy?.col === 'name' ? ' sorted' : '')} onClick={() => cycleSort('name')}>
+            Client <em className="sort-icon">{sortIcon('name')}</em>
+          </th>
+          <th className={'sortable' + (sortBy?.col === 'plan' ? ' sorted' : '')} onClick={() => cycleSort('plan')}>
+            Plan <em className="sort-icon">{sortIcon('plan')}</em>
+          </th>
+          <th className={'sortable' + (sortBy?.col === 'tz' ? ' sorted' : '')} onClick={() => cycleSort('tz')}>
+            Time Zone <em className="sort-icon">{sortIcon('tz')}</em>
+          </th>
+          <th className={'sortable' + (sortBy?.col === 'launch' ? ' sorted' : '')} onClick={() => cycleSort('launch')}>
+            Launch Date <em className="sort-icon">{sortIcon('launch')}</em>
+          </th>
+          <th className={'sortable' + (sortBy?.col === 'portal' ? ' sorted' : '')} onClick={() => cycleSort('portal')}>
+            Portal Updated <em className="sort-icon">{sortIcon('portal')}</em>
+          </th>
+          <th className={'sortable' + (sortBy?.col === 'stage' ? ' sorted' : '')} onClick={() => cycleSort('stage')}>
+            Intro Stage <em className="sort-icon">{sortIcon('stage')}</em>
+          </th>
+          <th className={'sortable cs-num' + (sortBy?.col === 'hired' ? ' sorted' : '')} onClick={() => cycleSort('hired')}>
+            Hired <em className="sort-icon">{sortIcon('hired')}</em>
+          </th>
+          <th className={'sortable' + (sortBy?.col === 'lastHire' ? ' sorted' : '')} onClick={() => cycleSort('lastHire')}>
+            Last Hire <em className="sort-icon">{sortIcon('lastHire')}</em>
+          </th>
+          <th className={'sortable cs-num' + (sortBy?.col === 'dnc' ? ' sorted' : '')} onClick={() => cycleSort('dnc')}>
+            DNC <em className="sort-icon">{sortIcon('dnc')}</em>
+          </th>
+          <th className={'sortable cs-num' + (sortBy?.col === 'agents' ? ' sorted' : '')} onClick={() => cycleSort('agents')}>
+            Agents <em className="sort-icon">{sortIcon('agents')}</em>
+          </th>
+        </tr>
+      </thead>
+      <tbody>
+        {sorted.map(({ c, staleIntro, hiredTotal, lastHireAt }) => {
+          const tzShort = c.time_zone ? (TZ_SHORT_BY_VALUE[c.time_zone] ?? c.time_zone) : null;
+          return (
+            <tr key={c.id}>
+              <td className="client-cell">
+                <div className="client-name">{c.name}</div>
+              </td>
+              <td>
+                <span className={`plan-badge ${PLAN_BADGE_CLASS[c.plan]}`}>{PLAN_LABEL[c.plan]}</span>
+              </td>
+              <td>
+                {tzShort
+                  ? <span className="cs-tz">{tzShort}</span>
+                  : (
+                    <button className="set-date-link" onClick={() => onEditClient(c)}>Set</button>
+                  )}
+              </td>
+              <td>
+                {c.start_date
+                  ? <span className="cs-date">{fmtISODateShort(c.start_date)}</span>
+                  : (
+                    <button className="set-date-link" onClick={() => onEditClient(c)}>Set date</button>
+                  )}
+              </td>
+              <td>
+                <span className={c.portal_synced_at ? 'cs-muted' : 'cs-none'}>
+                  {humanizeAgo(c.portal_synced_at, now)}
+                </span>
+              </td>
+              <td>
+                <span className={`cs-pill ${staleIntro ? 'cs-pill-warn' : 'cs-pill-good'}`}>
+                  <span className="cs-pill-dot" />
+                  {staleIntro ? 'Not Updated' : 'Current'}
+                </span>
+              </td>
+              <td className="cs-num">
+                {hiredTotal > 0
+                  ? <span className="cs-count">{hiredTotal}</span>
+                  : <span className="cs-none">—</span>}
+              </td>
+              <td>
+                <span className={lastHireAt ? 'cs-muted' : 'cs-none'}>
+                  {humanizeAgo(lastHireAt, now)}
+                </span>
+              </td>
+              <td className="cs-num">
+                {c.dnc_count > 0
+                  ? <span className="cs-count">{c.dnc_count.toLocaleString()}</span>
+                  : <span className="cs-none">—</span>}
+              </td>
+              <td className="cs-num">
+                {c.agents_count > 0
+                  ? <span className="cs-count">{c.agents_count.toLocaleString()}</span>
+                  : <span className="cs-none">—</span>}
               </td>
             </tr>
           );

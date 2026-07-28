@@ -16,6 +16,8 @@ export function generateSeed(): DashboardClient[] {
     last_corofy_intro_at: lastIntro ?? null,
     interested_corofy: 0,
     last_interested_at: null,
+    hired_corofy: 0,
+    last_hired_at: null,
   });
 
   // For seed/preview we hand out one fictional "current week" metrics row per client.
@@ -32,6 +34,10 @@ export function generateSeed(): DashboardClient[] {
     | 'billing_interval_days'
     | 'emails_today'
     | 'emails_today_date'
+    | 'portal_synced_at'
+    | 'time_zone'
+    | 'dnc_count'
+    | 'agents_count'
     | 'campaigns'
     | 'bisonCampaigns'
   > & {
@@ -173,6 +179,10 @@ export function generateSeed(): DashboardClient[] {
     billing_interval_days: null,
     emails_today: 0,
     emails_today_date: null,
+    portal_synced_at: null,
+    time_zone: null,
+    dnc_count: 0,
+    agents_count: 0,
     // Fill reply_count + interested_count on every nested campaign so they
     // satisfy the InstantlyCampaign / BisonCampaign types without bloating
     // each literal above.

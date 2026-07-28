@@ -39,8 +39,10 @@ interface CorofyIntrosResp {
 }
 
 // Defaults to "Introduction" (no label query param) for back-compat. Pass
-// 'Interested' to pull the Interested-tagged leads instead.
-export async function listCorofyIntros(label?: 'Introduction' | 'Interested'): Promise<CorofyIntro[]> {
+// 'Interested' or 'Hired' to pull those labels instead. The 'Hired' label
+// may not exist on the Corofy workspace yet — callers should treat 404s
+// (label not found) as non-fatal and skip writing.
+export async function listCorofyIntros(label?: 'Introduction' | 'Interested' | 'Hired'): Promise<CorofyIntro[]> {
   if (!BASE) throw new Error('COROFY_BASE_URL is not set');
   const url = new URL(`${BASE}/api/clients/intros`);
   if (label) url.searchParams.set('label', label);

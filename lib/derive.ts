@@ -6,6 +6,8 @@ const EMPTY_METRIC: Omit<WeeklyMetric, 'client_id' | 'week_key'> = {
   last_corofy_intro_at: null,
   interested_corofy: 0,
   last_interested_at: null,
+  hired_corofy: 0,
+  last_hired_at: null,
 };
 
 export function metricFor(c: DashboardClient, weekKey: string): WeeklyMetric {

@@ -31,6 +31,10 @@ interface ClientRow {
   billing_interval_days: number | null;
   emails_today: number | null;
   emails_today_date: string | null;
+  portal_synced_at: string | null;
+  time_zone: string | null;
+  dnc_count: number | null;
+  agents_count: number | null;
 }
 
 export async function loadDashboardClients(): Promise<{
@@ -122,6 +126,10 @@ export async function loadDashboardClients(): Promise<{
       billing_interval_days: c.billing_interval_days ?? null,
       emails_today: c.emails_today ?? 0,
       emails_today_date: c.emails_today_date ?? null,
+      portal_synced_at: c.portal_synced_at ?? null,
+      time_zone: c.time_zone ?? null,
+      dnc_count: c.dnc_count ?? 0,
+      agents_count: c.agents_count ?? 0,
       campaigns: linkedCampaigns,
       bisonCampaigns: linkedBison,
       metricsByWeek: metricsByClient.get(c.id) ?? {},

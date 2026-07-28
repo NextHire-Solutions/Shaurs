@@ -33,6 +33,8 @@ interface SyncResult {
     error?: string;
     intros?: number;
     interested?: number;     // count of "Interested"-labeled rows fetched
+    hired?: number;          // count of "Hired"-labeled rows fetched (0 until Corofy exposes the label)
+    hiredSkipped?: boolean;  // true if the Hired label call 404'd (label doesn't exist yet)
     skipped?: boolean;
     unmatched?: string[];
     portalsMatched?: number; // # clients flipped to portal_active=true
@@ -633,6 +635,74 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
       console.warn(`[corofy] Interested fetch failed: ${(e as Error).message}`);
     }
 
+    // Repeat the same shape for the "Hired" label. Fully non-fatal: the
+    // Corofy workspace may not have this label defined yet, in which case
+    // the endpoint 404s with `Label "Hired" not found`. We log & skip so
+    // Introduction / Interested / portals all still succeed.
+    let hiredTotal = 0;
+    let hiredSkipped = false;
+    try {
+      const hiredRows = await listCorofyIntros('Hired');
+      hiredTotal = hiredRows.length;
+      const byNameWeekH = new Map<string, { count: number; latest: number }>();
+      const allTimeLatestH = new Map<string, number>();
+      for (const i of hiredRows) {
+        const t = new Date(i.assigned_at).getTime();
+        if (!Number.isFinite(t)) continue;
+        const normKey = normalizeName(i.client_name);
+        if ((allTimeLatestH.get(normKey) ?? 0) < t) allTimeLatestH.set(normKey, t);
+        const wk = weekKey(new Date(t));
+        if (!validWeekSet.has(wk)) continue;
+        const k = `${normKey}|${wk}`;
+        const cur = byNameWeekH.get(k) ?? { count: 0, latest: 0 };
+        cur.count++;
+        if (t > cur.latest) cur.latest = t;
+        byNameWeekH.set(k, cur);
+      }
+      if (clients) {
+        const hiredUpserts: {
+          client_id: string;
+          week_key: string;
+          hired_corofy: number;
+          last_hired_at: string | null;
+        }[] = [];
+        for (const c of clients as { id: string; name: string }[]) {
+          const normKey = normalizeName(c.name);
+          const allTime = allTimeLatestH.get(normKey) ?? 0;
+          for (const wk of mondayKeys) {
+            const stats = byNameWeekH.get(`${normKey}|${wk}`);
+            const count = stats?.count ?? 0;
+            const latest = stats?.latest ?? 0;
+            const ts = latest > 0 ? latest : allTime;
+            hiredUpserts.push({
+              client_id: c.id,
+              week_key: wk,
+              hired_corofy: count,
+              last_hired_at: ts > 0 ? new Date(ts).toISOString() : null,
+            });
+          }
+        }
+        if (hiredUpserts.length > 0) {
+          const { error } = await sb
+            .from('weekly_metrics')
+            .upsert(hiredUpserts, { onConflict: 'client_id,week_key', ignoreDuplicates: false });
+          if (error) console.warn(`[corofy] hired upsert failed: ${error.message}`);
+        }
+      }
+      console.warn(`[corofy] Hired rows bucketed: ${hiredTotal}`);
+    } catch (e) {
+      const msg = (e as Error).message;
+      // Corofy returns 404 "Label X not found" when the label doesn't exist
+      // in the workspace. Downgrade this to an info log — it's expected until
+      // someone creates the label upstream.
+      if (msg.includes('404') || msg.toLowerCase().includes('not found')) {
+        hiredSkipped = true;
+        console.warn('[corofy] Hired label not present in workspace — skipping');
+      } else {
+        console.warn(`[corofy] Hired fetch failed: ${msg}`);
+      }
+    }
+
     // Piggyback portal sync on the same cron tick. Corofy's /api/clients/portals
     // is only reachable from sync-worker's Railway edge (the web service gets
     // 307 → /login), so we fetch + persist here. Failures are non-fatal: we
@@ -641,8 +711,14 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
     try {
       const portals = await listCorofyPortals();
       if (portals.length > 0) {
+        // Index portals by normalized name so we can look up the counts per
+        // client (not just active/inactive). One index entry per name AND
+        // per alias, all pointing back to the same portal record.
         const activeNames = new Set<string>();
+        const portalByNormName = new Map<string, typeof portals[number]>();
         for (const p of portals) {
+          portalByNormName.set(normalizeName(p.name), p);
+          for (const a of p.aliases ?? []) portalByNormName.set(normalizeName(a), p);
           if (p.portal_enabled) {
             activeNames.add(normalizeName(p.name));
             for (const a of p.aliases ?? []) activeNames.add(normalizeName(a));
@@ -656,11 +732,23 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
         // the INSERT path entirely.
         let updateErrors = 0;
         for (const c of (allClients ?? []) as { id: string; name: string }[]) {
-          const active = activeNames.has(normalizeName(c.name));
+          const norm = normalizeName(c.name);
+          const active = activeNames.has(norm);
           if (active) portalsMatched++;
+          // Mirror the DNC + Agents counts from Corofy. Zero when the client
+          // isn't in the portals response at all, or when Corofy didn't
+          // return counts (rare — the field is opt-in in their payload).
+          const portal = portalByNormName.get(norm);
+          const dncCount = portal?.counts?.dnc ?? 0;
+          const agentsCount = portal?.counts?.agents ?? 0;
           const { error } = await sb
             .from('clients')
-            .update({ portal_active: active, portal_synced_at: now })
+            .update({
+              portal_active: active,
+              portal_synced_at: now,
+              dnc_count: dncCount,
+              agents_count: agentsCount,
+            })
             .eq('id', c.id);
           if (error) {
             updateErrors++;
@@ -685,6 +773,8 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
       ok: true,
       intros: intros.length,
       interested: interestedTotal,
+      hired: hiredTotal,
+      hiredSkipped: hiredSkipped || undefined,
       unmatched: unmatched.length > 0 ? unmatched : undefined,
       portalsMatched,
     };
