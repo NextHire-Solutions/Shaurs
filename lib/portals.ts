@@ -21,6 +21,10 @@ export interface CorofyPortal {
   counts?: { pipeline: number; dnc: number; agents: number; team: number };
   created_at: string;
   updated_at: string;
+  // Most recent updated_at across every lead in the portal (any stage).
+  // Bumped on stage changes AND note additions. Null when the portal has
+  // no leads or none have been touched since creation.
+  last_lead_activity_at?: string | null;
 }
 
 interface CorofyPortalsResp {

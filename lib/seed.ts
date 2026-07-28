@@ -38,6 +38,9 @@ export function generateSeed(): DashboardClient[] {
     | 'time_zone'
     | 'dnc_count'
     | 'agents_count'
+    | 'last_lead_activity_at'
+    | 'stagnant_intros_count'
+    | 'intros_since_last_billing'
     | 'campaigns'
     | 'bisonCampaigns'
   > & {
@@ -183,6 +186,9 @@ export function generateSeed(): DashboardClient[] {
     time_zone: null,
     dnc_count: 0,
     agents_count: 0,
+    last_lead_activity_at: null,
+    stagnant_intros_count: 0,
+    intros_since_last_billing: 0,
     // Fill reply_count + interested_count on every nested campaign so they
     // satisfy the InstantlyCampaign / BisonCampaign types without bloating
     // each literal above.

@@ -376,6 +376,10 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       }
     });
     const totalFunnel = convertedTotal + interestedTotal;
+    // Completion % — aggregate intros this week vs aggregate weekly target
+    // across the same (non-hidden, non-paused) roster the intros/target
+    // cards use. 0 when no target has been set.
+    const completionPct = target > 0 ? Math.round((intros / target) * 100) : 0;
     return {
       total,
       risk,
@@ -386,6 +390,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       target,
       clientPaused,
       plans,
+      completionPct,
       conv: convDen > 0 ? ((convNum / convDen) * 1000).toFixed(1) + '%' : '—',
       // Raw avg (per-1k units, matches the displayed number) for row color logic.
       convAvg: convDen > 0 ? (convNum / convDen) * 1000 : 0,
@@ -493,6 +498,9 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             portal_synced_at: null,
             dnc_count: 0,
             agents_count: 0,
+            last_lead_activity_at: null,
+            stagnant_intros_count: 0,
+            intros_since_last_billing: 0,
             campaigns: [],
             bisonCampaigns: [],
             metricsByWeek: {},
@@ -650,6 +658,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
           <SummaryCard label="Done" cls="n-done" num={summary.done} sub="met weekly target" />
           <SummaryCard label="Intros Sent" cls="n-intros" num={summary.intros} sub="across all clients" />
           <SummaryCard label="Intros Target" cls="n-target" num={summary.target} sub="weekly across all clients" />
+          <SummaryCard label="Completion" cls="n-completion" num={`${summary.completionPct}%`} sub="intros vs weekly target" />
           <SummaryCard label="Client Paused" cls="n-cpaused" num={summary.clientPaused} sub="manually paused" />
           <SummaryCard
             label="By Plan"
@@ -1251,7 +1260,7 @@ function CampaignsPopup({
   );
 }
 
-type BwSortCol = 'name' | 'billing' | 'days' | 'intros';
+type BwSortCol = 'name' | 'tz' | 'billing' | 'days' | 'intros' | 'leftWeek';
 type BwSortBy = null | { col: BwSortCol; dir: 'desc' | 'asc' };
 
 function BiWeeklyTable({
@@ -1281,9 +1290,26 @@ function BiWeeklyTable({
     const anchor = c.billing_anchor_date ?? c.start_date;
     const billing = nextBillingDate(anchor, c.billing_interval, today, c.billing_interval_days);
     const days = billing ? daysUntil(billing, today) : null;
-    const intros = biweeklyIntros(c.metricsByWeek, today);
-    const target = BIWEEKLY_TARGET[c.plan];
-    return { c, billing, days, intros, target };
+    // "Introductions since last billing" — precomputed by the sync worker
+    // using each intro's assigned_at + the client's billing anchor. Preserves
+    // per-billing-cycle semantics that biweeklyIntros() can't offer.
+    const intros = c.intros_since_last_billing;
+    // Cycle target proportional to the billing interval — a monthly client's
+    // "target" for one cycle is ~4 weeks of their weekly target, not just
+    // the fixed biweekly number.
+    const cycleDays = c.billing_interval === 'biweekly' ? 14
+                    : c.billing_interval === '28-days' ? 28
+                    : c.billing_interval === 'monthly' ? 30
+                    : c.billing_interval === 'custom' ? (c.billing_interval_days ?? 14)
+                    : 14;
+    const target = Math.max(1, Math.round((c.weekly_target * cycleDays) / 7));
+    // "Introductions Left This Week" — target = weekly_target, subtracted by
+    // this Monday-week's intros_corofy from metricsByWeek.
+    const thisMondayKey = weekKey(getMondayOf(today));
+    const introsThisWeek = c.metricsByWeek[thisMondayKey]?.intros_corofy ?? 0;
+    const leftWeek = Math.max(0, c.weekly_target - introsThisWeek);
+    const tzShort = c.time_zone ? (TZ_SHORT_BY_VALUE[c.time_zone] ?? c.time_zone) : null;
+    return { c, billing, days, intros, target, leftWeek, tzShort };
   });
   type Row = (typeof rows)[number];
   const defaultCmp = (a: Row, b: Row) => {
@@ -1314,6 +1340,16 @@ function BiWeeklyTable({
           return mul * (b.days - a.days);
         case 'intros':
           return mul * (b.intros - a.intros);
+        case 'leftWeek':
+          return mul * (b.leftWeek - a.leftWeek);
+        case 'tz': {
+          const av = a.tzShort ?? '';
+          const bv = b.tzShort ?? '';
+          if (!av && !bv) return a.c.name.localeCompare(b.c.name);
+          if (!av) return 1;
+          if (!bv) return -1;
+          return -mul * av.localeCompare(bv);
+        }
         default:
           return 0;
       }
@@ -1329,6 +1365,13 @@ function BiWeeklyTable({
             title="Sort by client name — click to cycle desc / asc / reset"
           >
             Client <em className="sort-icon">{sortIcon('name')}</em>
+          </th>
+          <th
+            className={'sortable' + (sortBy?.col === 'tz' ? ' sorted' : '')}
+            onClick={() => cycleSort('tz')}
+            title="Sort by time zone — click to cycle desc / asc / reset"
+          >
+            Time Zone <em className="sort-icon">{sortIcon('tz')}</em>
           </th>
           <th
             className={'sortable' + (sortBy?.col === 'billing' ? ' sorted' : '')}
@@ -1347,20 +1390,35 @@ function BiWeeklyTable({
           <th
             className={'sortable' + (sortBy?.col === 'intros' ? ' sorted' : '')}
             onClick={() => cycleSort('intros')}
-            title="Sort by introductions this 14-day cycle — click to cycle desc / asc / reset"
+            title="Introductions since the client's last billing day — click to cycle desc / asc / reset"
           >
             Introductions <em className="sort-icon">{sortIcon('intros')}</em>
+          </th>
+          <th
+            className={'sortable' + (sortBy?.col === 'leftWeek' ? ' sorted' : '')}
+            onClick={() => cycleSort('leftWeek')}
+            title="Introductions left in the current Mon–Sun week — click to cycle desc / asc / reset"
+          >
+            Left This Week <em className="sort-icon">{sortIcon('leftWeek')}</em>
           </th>
         </tr>
       </thead>
       <tbody>
-        {sorted.map(({ c, billing, days, intros, target }) => {
+        {sorted.map(({ c, billing, days, intros, target, leftWeek, tzShort }) => {
           const introsCls =
             intros >= target ? 'bw-done' : intros >= Math.ceil(target / 2) ? 'bw-mid' : 'bw-short';
+          const leftCls = leftWeek === 0 ? 'bw-done' : 'bw-short';
           return (
             <tr key={c.id}>
               <td className="client-cell">
                 <div className="client-name">{c.name}</div>
+              </td>
+              <td>
+                {tzShort
+                  ? <span className="cs-tz">{tzShort}</span>
+                  : (
+                    <button className="set-date-link" onClick={() => onEditClient(c)}>Set</button>
+                  )}
               </td>
               <td>
                 {billing
@@ -1383,6 +1441,11 @@ function BiWeeklyTable({
               <td>
                 <span className={introsCls}>{intros}/{target}</span>
               </td>
+              <td>
+                <span className={leftCls}>
+                  {leftWeek === 0 ? 'Done' : `${leftWeek} left`}
+                </span>
+              </td>
             </tr>
           );
         })}
@@ -1395,16 +1458,15 @@ function BiWeeklyTable({
 // Weekly / Bi-Weekly throughput lens.
 //
 // Columns:
-//   Client | Plan | Time Zone | Launch Date | Portal Updated | Intro Stage
-//   | Hired | Last Hire | DNC | Agents
+//   Client | Plan | Time Zone | Launch Date | Portal Updated
+//   | Stagnant Intros | Hired | Last Hire | DNC | Agents
 //
-// All values come from data we already store on `clients` or the union of
-// weekly_metrics rows, except:
-//   - Intro Stage — derived from the newest last_corofy_intro_at across the
-//     26-week window; > STALE_INTRO_DAYS old → "Not Updated"
-//   - Hired / Last Hire — 0 / "—" until Corofy exposes the "Hired" label
-//     (the sync-worker call is non-fatal until then).
-const STALE_INTRO_DAYS = 7;
+// Data sources:
+//   - Portal Updated = clients.last_lead_activity_at (mirror of Corofy's
+//     portals.last_lead_activity_at, bumped on stage change or note addition).
+//   - Stagnant Intros = clients.stagnant_intros_count (Introduction-feed rows
+//     where updated_at ≈ assigned_at — i.e. never touched since entering).
+//   - Hired / Last Hire come from weekly_metrics hired_corofy/last_hired_at.
 
 type CsSortCol =
   | 'name' | 'plan' | 'tz' | 'launch' | 'portal' | 'stage'
@@ -1459,29 +1521,18 @@ function ClientSuccessTable({
   }
 
   const rows = clients.map((c) => {
-    // Newest last_corofy_intro_at across the client's whole metrics window.
-    let lastIntroMs = 0;
+    // Newest last_hired_at + sum hired across weekly_metrics.
     let lastHireMs = 0;
     let hiredTotal = 0;
     for (const m of Object.values(c.metricsByWeek)) {
-      if (m.last_corofy_intro_at) {
-        const t = new Date(m.last_corofy_intro_at).getTime();
-        if (Number.isFinite(t) && t > lastIntroMs) lastIntroMs = t;
-      }
       if (m.last_hired_at) {
         const t = new Date(m.last_hired_at).getTime();
         if (Number.isFinite(t) && t > lastHireMs) lastHireMs = t;
       }
       hiredTotal += m.hired_corofy ?? 0;
     }
-    const staleDays = lastIntroMs === 0
-      ? Number.POSITIVE_INFINITY
-      : Math.floor((now - lastIntroMs) / 86400000);
-    const staleIntro = staleDays > STALE_INTRO_DAYS;
     return {
       c,
-      lastIntroAt: lastIntroMs > 0 ? new Date(lastIntroMs).toISOString() : null,
-      staleIntro,
       hiredTotal,
       lastHireAt: lastHireMs > 0 ? new Date(lastHireMs).toISOString() : null,
     };
@@ -1515,14 +1566,8 @@ function ClientSuccessTable({
         case 'plan':    return -mul * a.c.plan.localeCompare(b.c.plan);
         case 'tz':      return strCmp(a.c.time_zone, b.c.time_zone) || a.c.name.localeCompare(b.c.name);
         case 'launch':  return dateCmp(a.c.start_date, b.c.start_date) || a.c.name.localeCompare(b.c.name);
-        case 'portal':  return dateCmp(a.c.portal_synced_at, b.c.portal_synced_at) || a.c.name.localeCompare(b.c.name);
-        case 'stage':   {
-          // "Current" (not stale) ranks BEFORE "Not Updated" on desc, after on asc.
-          const av = a.staleIntro ? 1 : 0;
-          const bv = b.staleIntro ? 1 : 0;
-          if (av !== bv) return mul * (bv - av);
-          return a.c.name.localeCompare(b.c.name);
-        }
+        case 'portal':  return dateCmp(a.c.last_lead_activity_at, b.c.last_lead_activity_at) || a.c.name.localeCompare(b.c.name);
+        case 'stage':   return numCmp(a.c.stagnant_intros_count, b.c.stagnant_intros_count) || a.c.name.localeCompare(b.c.name);
         case 'hired':    return numCmp(a.hiredTotal, b.hiredTotal) || a.c.name.localeCompare(b.c.name);
         case 'lastHire': return dateCmp(a.lastHireAt, b.lastHireAt) || a.c.name.localeCompare(b.c.name);
         case 'dnc':      return numCmp(a.c.dnc_count, b.c.dnc_count) || a.c.name.localeCompare(b.c.name);
@@ -1548,11 +1593,19 @@ function ClientSuccessTable({
           <th className={'sortable' + (sortBy?.col === 'launch' ? ' sorted' : '')} onClick={() => cycleSort('launch')}>
             Launch Date <em className="sort-icon">{sortIcon('launch')}</em>
           </th>
-          <th className={'sortable' + (sortBy?.col === 'portal' ? ' sorted' : '')} onClick={() => cycleSort('portal')}>
+          <th
+            className={'sortable' + (sortBy?.col === 'portal' ? ' sorted' : '')}
+            onClick={() => cycleSort('portal')}
+            title="Last time any lead in this client's portal was touched (stage change or note added)"
+          >
             Portal Updated <em className="sort-icon">{sortIcon('portal')}</em>
           </th>
-          <th className={'sortable' + (sortBy?.col === 'stage' ? ' sorted' : '')} onClick={() => cycleSort('stage')}>
-            Intro Stage <em className="sort-icon">{sortIcon('stage')}</em>
+          <th
+            className={'sortable cs-num' + (sortBy?.col === 'stage' ? ' sorted' : '')}
+            onClick={() => cycleSort('stage')}
+            title="Leads in the Introduction stage that have never been updated since entering"
+          >
+            Stagnant Intros <em className="sort-icon">{sortIcon('stage')}</em>
           </th>
           <th className={'sortable cs-num' + (sortBy?.col === 'hired' ? ' sorted' : '')} onClick={() => cycleSort('hired')}>
             Hired <em className="sort-icon">{sortIcon('hired')}</em>
@@ -1569,7 +1622,7 @@ function ClientSuccessTable({
         </tr>
       </thead>
       <tbody>
-        {sorted.map(({ c, staleIntro, hiredTotal, lastHireAt }) => {
+        {sorted.map(({ c, hiredTotal, lastHireAt }) => {
           const tzShort = c.time_zone ? (TZ_SHORT_BY_VALUE[c.time_zone] ?? c.time_zone) : null;
           return (
             <tr key={c.id}>
@@ -1594,15 +1647,14 @@ function ClientSuccessTable({
                   )}
               </td>
               <td>
-                <span className={c.portal_synced_at ? 'cs-muted' : 'cs-none'}>
-                  {humanizeAgo(c.portal_synced_at, now)}
+                <span className={c.last_lead_activity_at ? 'cs-muted' : 'cs-none'}>
+                  {humanizeAgo(c.last_lead_activity_at, now)}
                 </span>
               </td>
-              <td>
-                <span className={`cs-pill ${staleIntro ? 'cs-pill-warn' : 'cs-pill-good'}`}>
-                  <span className="cs-pill-dot" />
-                  {staleIntro ? 'Not Updated' : 'Current'}
-                </span>
+              <td className="cs-num">
+                {c.stagnant_intros_count > 0
+                  ? <span className="cs-count">{c.stagnant_intros_count}</span>
+                  : <span className="cs-none">—</span>}
               </td>
               <td className="cs-num">
                 {hiredTotal > 0

@@ -19,7 +19,7 @@ import {
   listBisonCampaigns,
   mapBisonStatus,
 } from '../lib/bison';
-import { addDays, getMondayOf, normalizeName, todayInET, weekKey } from '../lib/derive';
+import { addDays, getMondayOf, lastBillingDate, normalizeName, todayInET, weekKey } from '../lib/derive';
 import { listCorofyIntros } from '../lib/corofy';
 import { listCorofyPortals } from '../lib/portals';
 import { autoMatchCampaignIds } from '../lib/matchCampaigns';
@@ -494,7 +494,11 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
       byNameWeek.set(k, cur);
     }
 
-    const { data: clients } = await sb.from('clients').select('id, name');
+    // Also pull billing fields so we can compute per-client
+    // intros_since_last_billing (see the second pass below).
+    const { data: clients } = await sb
+      .from('clients')
+      .select('id, name, billing_anchor_date, billing_interval, billing_interval_days, start_date');
     const matchedNormalized = new Set<string>();
     if (clients) {
       const upserts: {
@@ -527,6 +531,71 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
           .from('weekly_metrics')
           .upsert(upserts, { onConflict: 'client_id,week_key', ignoreDuplicates: false });
         if (error) throw new Error(error.message);
+      }
+
+      // Second pass over the same `intros` array to derive two per-client
+      // metrics that live on the clients table (not weekly_metrics):
+      //
+      //   intros_since_last_billing = intros whose assigned_at falls on/after
+      //     the client's most recent billing anchor cycle. Powers the Bi-Weekly
+      //     "Introductions (since last billing)" column. Falls back to
+      //     start_date when billing_anchor_date is null (same rule the
+      //     Bi-Weekly UI uses today).
+      //
+      //   stagnant_intros_count = intros where updated_at - assigned_at < 2s
+      //     (i.e. the lead entered the Introduction stage and hasn't been
+      //     touched since). 2s tolerance handles clock precision.
+      //
+      // Both fields are graceful when Corofy fields are missing: intros with
+      // no updated_at give NaN which fails the < 2000 check → not counted.
+      const nowMs = Date.now();
+      const introsByNorm = new Map<string, typeof intros>();
+      for (const i of intros) {
+        const k = normalizeName(i.client_name);
+        let bucket = introsByNorm.get(k);
+        if (!bucket) { bucket = []; introsByNorm.set(k, bucket); }
+        bucket.push(i);
+      }
+      let cfWriteErrors = 0;
+      for (const c of clients as {
+        id: string;
+        name: string;
+        billing_anchor_date: string | null;
+        billing_interval: 'biweekly' | '28-days' | 'monthly' | 'custom' | null;
+        billing_interval_days: number | null;
+        start_date: string | null;
+      }[]) {
+        const normKey = normalizeName(c.name);
+        const clientIntros = introsByNorm.get(normKey) ?? [];
+        const anchor = c.billing_anchor_date ?? c.start_date;
+        const interval = c.billing_interval ?? 'biweekly';
+        const lastBilling = lastBillingDate(anchor, interval, new Date(nowMs), c.billing_interval_days);
+        let intrsSince = 0;
+        let stagnant = 0;
+        for (const r of clientIntros) {
+          const aMs = new Date(r.assigned_at).getTime();
+          if (Number.isFinite(aMs) && lastBilling && aMs >= lastBilling.getTime()) intrsSince++;
+          if (r.updated_at) {
+            const uMs = new Date(r.updated_at).getTime();
+            if (Number.isFinite(uMs) && uMs - aMs < 2000) stagnant++;
+          }
+        }
+        const { error } = await sb
+          .from('clients')
+          .update({
+            intros_since_last_billing: intrsSince,
+            stagnant_intros_count: stagnant,
+          })
+          .eq('id', c.id);
+        if (error) {
+          cfWriteErrors++;
+          if (cfWriteErrors <= 3) {
+            console.warn(`[corofy] client-field update failed for ${c.name}: ${error.message}`);
+          }
+        }
+      }
+      if (cfWriteErrors > 3) {
+        console.warn(`[corofy] ...${cfWriteErrors - 3} more client-field update errors suppressed`);
       }
     }
 
@@ -741,6 +810,10 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
           const portal = portalByNormName.get(norm);
           const dncCount = portal?.counts?.dnc ?? 0;
           const agentsCount = portal?.counts?.agents ?? 0;
+          // Corofy's per-portal "any lead touched since" timestamp. Undefined
+          // on Corofy deployments that predate the field → we write null and
+          // the UI renders "—".
+          const lastActivity = portal?.last_lead_activity_at ?? null;
           const { error } = await sb
             .from('clients')
             .update({
@@ -748,6 +821,7 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
               portal_synced_at: now,
               dnc_count: dncCount,
               agents_count: agentsCount,
+              last_lead_activity_at: lastActivity,
             })
             .eq('id', c.id);
           if (error) {

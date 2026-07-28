@@ -35,6 +35,9 @@ interface ClientRow {
   time_zone: string | null;
   dnc_count: number | null;
   agents_count: number | null;
+  last_lead_activity_at: string | null;
+  stagnant_intros_count: number | null;
+  intros_since_last_billing: number | null;
 }
 
 export async function loadDashboardClients(): Promise<{
@@ -130,6 +133,9 @@ export async function loadDashboardClients(): Promise<{
       time_zone: c.time_zone ?? null,
       dnc_count: c.dnc_count ?? 0,
       agents_count: c.agents_count ?? 0,
+      last_lead_activity_at: c.last_lead_activity_at ?? null,
+      stagnant_intros_count: c.stagnant_intros_count ?? 0,
+      intros_since_last_billing: c.intros_since_last_billing ?? 0,
       campaigns: linkedCampaigns,
       bisonCampaigns: linkedBison,
       metricsByWeek: metricsByClient.get(c.id) ?? {},

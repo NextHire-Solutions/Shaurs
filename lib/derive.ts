@@ -72,6 +72,41 @@ export function todayInET(now = new Date()): string {
   }).format(now);
 }
 
+// Compute the MOST RECENT billing date on or before today (start of the
+// current billing cycle). Returns null when no anchor is provided OR when
+// the anchor itself is in the future (there is no "last" cycle yet).
+export function lastBillingDate(
+  anchorISO: string | null,
+  interval: BillingInterval,
+  today: Date = new Date(),
+  customDays: number | null = null,
+): Date | null {
+  if (!anchorISO) return null;
+  const anchor = asUTC(anchorISO);
+  if (anchor.getTime() > today.getTime()) return null;
+  let step: number | null = null;
+  if (interval === 'biweekly') step = 14;
+  else if (interval === '28-days') step = 28;
+  else if (interval === 'custom') {
+    step = customDays && customDays > 0 ? Math.floor(customDays) : null;
+    if (step === null) return null;
+  }
+  if (step !== null) {
+    const daysSince = Math.floor((today.getTime() - anchor.getTime()) / 86400000);
+    const cyclesElapsed = Math.floor(daysSince / step);
+    return addDays(anchor, cyclesElapsed * step);
+  }
+  // Monthly: iterate months forward from the anchor, but stop AT the last one
+  // that's <= today (so `prev` is the current cycle's start).
+  const cursor = new Date(anchor);
+  while (true) {
+    const next = new Date(cursor);
+    next.setUTCMonth(next.getUTCMonth() + 1);
+    if (next.getTime() > today.getTime()) return cursor;
+    cursor.setTime(next.getTime());
+  }
+}
+
 // Compute the NEXT billing date based on anchor + interval. Returns null when
 // no anchor is provided (caller is expected to fall back to start_date), or
 // when interval='custom' but no positive day count is configured yet.

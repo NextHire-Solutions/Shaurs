@@ -20,7 +20,12 @@ function token(): string {
 
 export interface CorofyIntro {
   client_name: string;
-  assigned_at: string; // ISO 8601 UTC
+  assigned_at: string; // ISO 8601 UTC — when the lead entered this stage
+  // Most recent lead-level modification (note added, other edit).
+  // Immediately after assignment updated_at === assigned_at; bumps forward
+  // on subsequent edits. Optional so we tolerate old Corofy deployments
+  // that predate this field.
+  updated_at?: string;
   lead_email?: string | null;
   lead_name?: string | null;
   // Per-record campaign attribution (present on the Interested feed).
