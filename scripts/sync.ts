@@ -817,11 +817,12 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
           const dncCount = portal?.counts?.dnc ?? 0;
           const agentsCount = portal?.counts?.agents ?? 0;
           // Corofy's per-portal "most recent CLIENT-driven action" timestamp.
-          // Prefer last_client_activity_at (excludes our-side automation);
-          // fall back to last_lead_activity_at only for Corofy deployments
-          // that predate the client_activity_at rollout. Both being undefined
-          // → null (UI renders "—").
-          const lastActivity = portal?.last_client_activity_at ?? portal?.last_lead_activity_at ?? null;
+          // Field always present now — null means genuine "no client engagement",
+          // which we surface as "—" in the UI. Do NOT fall back to the older
+          // last_lead_activity_at: that would mask Corofy's authoritative null
+          // with a FUB-polluted timestamp from before the client_activity_at
+          // rollout.
+          const lastActivity = portal?.last_client_activity_at ?? null;
           const { error } = await sb
             .from('clients')
             .update({
