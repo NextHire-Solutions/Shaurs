@@ -21,11 +21,14 @@ function token(): string {
 export interface CorofyIntro {
   client_name: string;
   assigned_at: string; // ISO 8601 UTC — when the lead entered this stage
-  // Most recent lead-level modification (note added, other edit).
-  // Immediately after assignment updated_at === assigned_at; bumps forward
-  // on subsequent edits. Optional so we tolerate old Corofy deployments
-  // that predate this field.
+  // Most recent lead-level modification (any writer, including automation).
+  // Kept for backward-compat; superseded by client_activity_at.
   updated_at?: string;
+  // Most recent CLIENT-DRIVEN action on this lead. Null when the client
+  // has never touched it post-assignment. Excludes our-side automation
+  // (FUB auto-push, move-agent, sync, new intro assignment). Used to
+  // count "stagnant intros" per client on the Client Success tab.
+  client_activity_at?: string | null;
   lead_email?: string | null;
   lead_name?: string | null;
   // Per-record campaign attribution (present on the Interested feed).

@@ -542,12 +542,14 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
       //     start_date when billing_anchor_date is null (same rule the
       //     Bi-Weekly UI uses today).
       //
-      //   stagnant_intros_count = intros where updated_at - assigned_at < 2s
-      //     (i.e. the lead entered the Introduction stage and hasn't been
-      //     touched since). 2s tolerance handles clock precision.
+      //   stagnant_intros_count = intros where client_activity_at IS NULL
+      //     (i.e. the client has never taken a portal action on this lead
+      //     since we assigned it). Excludes FUB auto-push and other server
+      //     automations — Corofy's client_activity_at trigger is the source
+      //     of truth. Falls back to the older `updated_at ≈ assigned_at`
+      //     heuristic for Corofy deployments that predate client_activity_at.
       //
-      // Both fields are graceful when Corofy fields are missing: intros with
-      // no updated_at give NaN which fails the < 2000 check → not counted.
+      // Both fields are graceful when Corofy fields are missing.
       const nowMs = Date.now();
       const introsByNorm = new Map<string, typeof intros>();
       for (const i of intros) {
@@ -575,7 +577,11 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
         for (const r of clientIntros) {
           const aMs = new Date(r.assigned_at).getTime();
           if (Number.isFinite(aMs) && lastBilling && aMs >= lastBilling.getTime()) intrsSince++;
-          if (r.updated_at) {
+          // Prefer Corofy's client_activity_at (null == stagnant); fall back
+          // to the old updated_at heuristic when the field is absent.
+          if ('client_activity_at' in r) {
+            if (r.client_activity_at == null) stagnant++;
+          } else if (r.updated_at) {
             const uMs = new Date(r.updated_at).getTime();
             if (Number.isFinite(uMs) && uMs - aMs < 2000) stagnant++;
           }
@@ -810,10 +816,12 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
           const portal = portalByNormName.get(norm);
           const dncCount = portal?.counts?.dnc ?? 0;
           const agentsCount = portal?.counts?.agents ?? 0;
-          // Corofy's per-portal "any lead touched since" timestamp. Undefined
-          // on Corofy deployments that predate the field → we write null and
-          // the UI renders "—".
-          const lastActivity = portal?.last_lead_activity_at ?? null;
+          // Corofy's per-portal "most recent CLIENT-driven action" timestamp.
+          // Prefer last_client_activity_at (excludes our-side automation);
+          // fall back to last_lead_activity_at only for Corofy deployments
+          // that predate the client_activity_at rollout. Both being undefined
+          // → null (UI renders "—").
+          const lastActivity = portal?.last_client_activity_at ?? portal?.last_lead_activity_at ?? null;
           const { error } = await sb
             .from('clients')
             .update({
