@@ -63,9 +63,34 @@ export async function loadDashboardClients(): Promise<{
   // Sliding window: this Monday minus N-1 weeks.
   const earliestMonday = weekKey(addDays(getMondayOf(new Date()), -7 * (HISTORICAL_WEEKS - 1)));
 
+  // Supabase's PostgREST caps a single response at 1000 rows by default. With
+  // 40+ clients × 26 weeks of history we bump straight into that ceiling and
+  // random weeks get silently dropped from random clients (Chucktown/Howe hit
+  // this and looked like they had zero intros this week). Paginate through
+  // the metrics table explicitly so every row lands in memory. The other
+  // three tables are small — one row per client / one per campaign — and
+  // stay well under 1000.
+  const PAGE_SIZE = 1000;
+  async function fetchAllMetrics(): Promise<{ data: WeeklyMetric[]; error: { message: string } | null }> {
+    const all: WeeklyMetric[] = [];
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await sb!
+        .from('weekly_metrics')
+        .select('*')
+        .gte('week_key', earliestMonday)
+        .order('week_key', { ascending: false })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) return { data: all, error };
+      const rows = (data ?? []) as WeeklyMetric[];
+      all.push(...rows);
+      if (rows.length < PAGE_SIZE) break;
+    }
+    return { data: all, error: null };
+  }
+
   const [clientsRes, metricsRes, campaignsRes, bisonRes] = await Promise.all([
     sb.from('clients').select('*').order('name'),
-    sb.from('weekly_metrics').select('*').gte('week_key', earliestMonday),
+    fetchAllMetrics(),
     sb.from('instantly_campaigns').select('*'),
     sb.from('bison_campaigns').select('*'),
   ]);
