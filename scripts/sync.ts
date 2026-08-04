@@ -574,9 +574,15 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
         const lastBilling = lastBillingDate(anchor, interval, new Date(nowMs), c.billing_interval_days);
         let intrsSince = 0;
         let stagnant = 0;
+        // Current cycle starts the DAY AFTER the last billing day (the
+        // billing day itself belongs to the outgoing cycle — that's when the
+        // client is charged for it). Add 86.4M ms (24h) to skip the whole
+        // billing day. lastBillingDate returns midnight UTC, so + 1 day
+        // lands cleanly at midnight of the next day.
+        const cycleStartMs = lastBilling ? lastBilling.getTime() + 86_400_000 : 0;
         for (const r of clientIntros) {
           const aMs = new Date(r.assigned_at).getTime();
-          if (Number.isFinite(aMs) && lastBilling && aMs >= lastBilling.getTime()) intrsSince++;
+          if (Number.isFinite(aMs) && cycleStartMs > 0 && aMs >= cycleStartMs) intrsSince++;
           // Prefer Corofy's client_activity_at (null == stagnant); fall back
           // to the old updated_at heuristic when the field is absent.
           if ('client_activity_at' in r) {

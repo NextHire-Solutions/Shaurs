@@ -1260,7 +1260,7 @@ function CampaignsPopup({
   );
 }
 
-type BwSortCol = 'name' | 'tz' | 'billing' | 'days' | 'intros' | 'leftWeek';
+type BwSortCol = 'name' | 'tz' | 'billing' | 'days' | 'intros' | 'leftCycle';
 type BwSortBy = null | { col: BwSortCol; dir: 'desc' | 'asc' };
 
 function BiWeeklyTable({
@@ -1303,13 +1303,13 @@ function BiWeeklyTable({
                     : c.billing_interval === 'custom' ? (c.billing_interval_days ?? 14)
                     : 14;
     const target = Math.max(1, Math.round((c.weekly_target * cycleDays) / 7));
-    // "Introductions Left This Week" — target = weekly_target, subtracted by
-    // this Monday-week's intros_corofy from metricsByWeek.
-    const thisMondayKey = weekKey(getMondayOf(today));
-    const introsThisWeek = c.metricsByWeek[thisMondayKey]?.intros_corofy ?? 0;
-    const leftWeek = Math.max(0, c.weekly_target - introsThisWeek);
+    // "Introductions Left This Cycle" — cycleTarget minus intros-since-last-
+    // billing. Parallels the Introductions column (which uses the same
+    // cycle definition) so a single glance tells you where in the cycle
+    // the client stands.
+    const leftCycle = Math.max(0, target - intros);
     const tzShort = c.time_zone ? (TZ_SHORT_BY_VALUE[c.time_zone] ?? c.time_zone) : null;
-    return { c, billing, days, intros, target, leftWeek, tzShort };
+    return { c, billing, days, intros, target, leftCycle, tzShort };
   });
   type Row = (typeof rows)[number];
   const defaultCmp = (a: Row, b: Row) => {
@@ -1340,8 +1340,8 @@ function BiWeeklyTable({
           return mul * (b.days - a.days);
         case 'intros':
           return mul * (b.intros - a.intros);
-        case 'leftWeek':
-          return mul * (b.leftWeek - a.leftWeek);
+        case 'leftCycle':
+          return mul * (b.leftCycle - a.leftCycle);
         case 'tz': {
           const av = a.tzShort ?? '';
           const bv = b.tzShort ?? '';
@@ -1395,19 +1395,19 @@ function BiWeeklyTable({
             Introductions <em className="sort-icon">{sortIcon('intros')}</em>
           </th>
           <th
-            className={'sortable' + (sortBy?.col === 'leftWeek' ? ' sorted' : '')}
-            onClick={() => cycleSort('leftWeek')}
-            title="Introductions left in the current Mon–Sun week — click to cycle desc / asc / reset"
+            className={'sortable' + (sortBy?.col === 'leftCycle' ? ' sorted' : '')}
+            onClick={() => cycleSort('leftCycle')}
+            title="Introductions left in the current billing cycle — click to cycle desc / asc / reset"
           >
-            Left This Week <em className="sort-icon">{sortIcon('leftWeek')}</em>
+            Left This Cycle <em className="sort-icon">{sortIcon('leftCycle')}</em>
           </th>
         </tr>
       </thead>
       <tbody>
-        {sorted.map(({ c, billing, days, intros, target, leftWeek, tzShort }) => {
+        {sorted.map(({ c, billing, days, intros, target, leftCycle, tzShort }) => {
           const introsCls =
             intros >= target ? 'bw-done' : intros >= Math.ceil(target / 2) ? 'bw-mid' : 'bw-short';
-          const leftCls = leftWeek === 0 ? 'bw-done' : 'bw-short';
+          const leftCls = leftCycle === 0 ? 'bw-done' : 'bw-short';
           return (
             <tr key={c.id}>
               <td className="client-cell">
@@ -1443,7 +1443,7 @@ function BiWeeklyTable({
               </td>
               <td>
                 <span className={leftCls}>
-                  {leftWeek === 0 ? 'Done' : `${leftWeek} left`}
+                  {leftCycle === 0 ? 'Done' : `${leftCycle} left`}
                 </span>
               </td>
             </tr>
