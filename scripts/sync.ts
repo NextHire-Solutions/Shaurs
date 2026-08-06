@@ -25,6 +25,28 @@ import { listCorofyPortals } from '../lib/portals';
 import { autoMatchCampaignIds } from '../lib/matchCampaigns';
 import { HISTORICAL_WEEKS } from '../lib/types';
 
+// Corofy client-name aliases — intros/interested/hired rows tagged with any
+// of the alias names get counted under the primary client name here. Use
+// only when Corofy has legitimately-separate portals that BrokerStaffer
+// treats as one client (no equivalent client row on our side).
+const CLIENT_NAME_ALIASES: Record<string, string[]> = {
+  'Properties & Estates': ['Properties & Estates Florida'],
+};
+
+// Build a lookup: normalized alias name → normalized primary name.
+const _ALIAS_OVERRIDE = new Map<string, string>();
+for (const [primary, aliases] of Object.entries(CLIENT_NAME_ALIASES)) {
+  const primaryNorm = normalizeName(primary);
+  for (const a of aliases) _ALIAS_OVERRIDE.set(normalizeName(a), primaryNorm);
+}
+
+// Wrap normalizeName so alias-name intros collapse to the primary name.
+// Everywhere the sync worker keys intros by name should route through this.
+function normalizeClientName(name: string): string {
+  const n = normalizeName(name);
+  return _ALIAS_OVERRIDE.get(n) ?? n;
+}
+
 interface SyncResult {
   instantly: { ok: boolean; error?: string; campaigns?: number; weeksBackfilled?: number };
   bison: { ok: boolean; error?: string; campaigns?: number; weeksBackfilled?: number; skipped?: boolean };
@@ -479,7 +501,7 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
     for (const i of intros) {
       const t = new Date(i.assigned_at).getTime();
       if (!Number.isFinite(t)) continue;
-      const normKey = normalizeName(i.client_name);
+      const normKey = normalizeClientName(i.client_name);
       if (!seenOriginalByNormalized.has(normKey)) {
         seenOriginalByNormalized.set(normKey, i.client_name);
       }
@@ -553,7 +575,7 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
       const nowMs = Date.now();
       const introsByNorm = new Map<string, typeof intros>();
       for (const i of intros) {
-        const k = normalizeName(i.client_name);
+        const k = normalizeClientName(i.client_name);
         let bucket = introsByNorm.get(k);
         if (!bucket) { bucket = []; introsByNorm.set(k, bucket); }
         bucket.push(i);
@@ -634,7 +656,7 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
       for (const i of interestedRows) {
         const t = new Date(i.assigned_at).getTime();
         if (!Number.isFinite(t)) continue;
-        const normKey = normalizeName(i.client_name);
+        const normKey = normalizeClientName(i.client_name);
         if ((allTimeLatestI.get(normKey) ?? 0) < t) allTimeLatestI.set(normKey, t);
         const wk = weekKey(new Date(t));
         if (!validWeekSet.has(wk)) continue;
@@ -730,7 +752,7 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
       for (const i of hiredRows) {
         const t = new Date(i.assigned_at).getTime();
         if (!Number.isFinite(t)) continue;
-        const normKey = normalizeName(i.client_name);
+        const normKey = normalizeClientName(i.client_name);
         if ((allTimeLatestH.get(normKey) ?? 0) < t) allTimeLatestH.set(normKey, t);
         const wk = weekKey(new Date(t));
         if (!validWeekSet.has(wk)) continue;
