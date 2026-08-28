@@ -44,6 +44,22 @@ header { background: var(--white); border-bottom: 1px solid var(--border); paddi
 .btn-refresh { background: none; border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; font-size: 12px; font-weight: 600; color: var(--text-muted); cursor: pointer; transition: all 0.15s; }
 .btn-refresh:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-pale); }
 .btn-refresh:disabled { opacity: 0.5; cursor: default; }
+.btn-logout { background: none; border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; font-size: 12px; font-weight: 600; color: var(--text-muted); cursor: pointer; transition: all 0.15s; }
+.btn-logout:hover { border-color: var(--red); color: var(--red); background: var(--red-bg); }
+
+/* Login page */
+.login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: #f5f7fa; padding: 24px; }
+.login-card { width: 100%; max-width: 380px; background: #fff; border: 1px solid var(--border); border-radius: 12px; padding: 32px 28px; box-shadow: 0 6px 24px rgba(15, 23, 42, 0.06); }
+.login-brand { font-size: 12px; font-weight: 700; letter-spacing: 1.5px; color: var(--blue); text-transform: uppercase; }
+.login-title { font-size: 22px; font-weight: 800; color: var(--text); margin-top: 6px; }
+.login-sub { font-size: 13px; color: var(--text-muted); margin-top: 4px; margin-bottom: 22px; }
+.login-form { display: flex; flex-direction: column; gap: 10px; }
+.login-input { border: 1px solid var(--border); border-radius: 8px; padding: 11px 14px; font-size: 14px; font-family: inherit; outline: none; transition: border-color 0.15s; }
+.login-input:focus { border-color: var(--blue); }
+.login-error { font-size: 13px; color: var(--red); background: var(--red-bg); border: 1px solid #FCA5A5; border-radius: 6px; padding: 8px 10px; }
+.login-btn { background: var(--blue); border: none; border-radius: 8px; padding: 11px 14px; font-size: 14px; font-weight: 700; color: #fff; cursor: pointer; transition: opacity 0.15s; }
+.login-btn:hover { opacity: 0.92; }
+.login-btn:disabled { opacity: 0.5; cursor: default; }
 .btn-add { background: var(--blue); color: white; border: none; border-radius: 8px; padding: 8px 15px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; transition: background 0.15s; }
 .btn-add:hover { background: var(--blue-dark); }
 

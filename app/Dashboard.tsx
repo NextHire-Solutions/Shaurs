@@ -643,6 +643,16 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             {refreshing ? '…' : '↻'}
           </button>
           <button className="btn-add" onClick={openAddModal}>+ Add Client</button>
+          <button
+            className="btn-logout"
+            title="Sign out"
+            onClick={async () => {
+              await fetch('/api/auth/logout', { method: 'POST' });
+              window.location.href = '/login';
+            }}
+          >
+            Sign out
+          </button>
         </div>
       </header>
 
