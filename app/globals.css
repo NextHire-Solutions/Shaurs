@@ -444,6 +444,12 @@ td { padding: 13px 16px; font-size: 13px; vertical-align: middle; }
 .cs-pill-warn { background: var(--yellow-bg); border-color: var(--yellow-border); color: var(--yellow); }
 .cs-pill-warn .cs-pill-dot { background: var(--yellow); }
 
+/* Client Success score column — 0.0–10.0 color-graded pill */
+.cs-score { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.cs-score-good { background: var(--green-bg);  border: 1px solid var(--green-border);  color: var(--green); }
+.cs-score-mid  { background: var(--yellow-bg); border: 1px solid var(--yellow-border); color: var(--yellow); }
+.cs-score-low  { background: var(--red-bg);    border: 1px solid #FCA5A5;              color: var(--red); }
+
 .actions { display: flex; align-items: center; justify-content: flex-end; gap: 4px; white-space: nowrap; }
 .btn-icon { flex: 0 0 auto; background: none; border: 1px solid var(--border); border-radius: 7px; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 13px; color: var(--text-muted); transition: all 0.15s; padding: 0; }
 

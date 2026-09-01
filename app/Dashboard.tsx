@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import {
   addDays,
   biweeklyIntros,
+  clientScore,
   daysUntil,
   derive,
   formatWeek,
@@ -1479,8 +1480,16 @@ function BiWeeklyTable({
 //   - Hired / Last Hire come from weekly_metrics hired_corofy/last_hired_at.
 
 type CsSortCol =
-  | 'name' | 'plan' | 'tz' | 'launch' | 'portal' | 'stage'
+  | 'name' | 'plan' | 'score' | 'tz' | 'launch' | 'portal' | 'stage'
   | 'hired' | 'lastHire' | 'dnc' | 'agents';
+
+// Score column color threshold — kept close to the score column render so the
+// three cutoffs live in one place if the team wants to retune later.
+function scoreClass(s: number): 'cs-score-good' | 'cs-score-mid' | 'cs-score-low' {
+  if (s >= 8) return 'cs-score-good';
+  if (s >= 5) return 'cs-score-mid';
+  return 'cs-score-low';
+}
 type CsSortBy = null | { col: CsSortCol; dir: 'desc' | 'asc' };
 
 // "5 min ago" / "2h ago" / "3d ago" / "—" — used for both portal_synced_at
@@ -1530,6 +1539,7 @@ function ClientSuccessTable({
     return sortBy.dir === 'desc' ? '↓' : '↑';
   }
 
+  const nowDate = new Date(now);
   const rows = clients.map((c) => {
     // Newest last_hired_at + sum hired across weekly_metrics.
     let lastHireMs = 0;
@@ -1541,10 +1551,12 @@ function ClientSuccessTable({
       }
       hiredTotal += m.hired_corofy ?? 0;
     }
+    const scoreInfo = clientScore(c.metricsByWeek, c.weekly_target, nowDate);
     return {
       c,
       hiredTotal,
       lastHireAt: lastHireMs > 0 ? new Date(lastHireMs).toISOString() : null,
+      score: scoreInfo.score,
     };
   });
   type Row = (typeof rows)[number];
@@ -1574,6 +1586,13 @@ function ClientSuccessTable({
       switch (sortBy.col) {
         case 'name':    return -mul * a.c.name.localeCompare(b.c.name);
         case 'plan':    return -mul * a.c.plan.localeCompare(b.c.plan);
+        case 'score':   {
+          // Null scores (new clients) sink to bottom regardless of direction.
+          if (a.score === null && b.score === null) return a.c.name.localeCompare(b.c.name);
+          if (a.score === null) return 1;
+          if (b.score === null) return -1;
+          return mul * (b.score - a.score) || a.c.name.localeCompare(b.c.name);
+        }
         case 'tz':      return strCmp(a.c.time_zone, b.c.time_zone) || a.c.name.localeCompare(b.c.name);
         case 'launch':  return dateCmp(a.c.start_date, b.c.start_date) || a.c.name.localeCompare(b.c.name);
         case 'portal':  return dateCmp(a.c.last_lead_activity_at, b.c.last_lead_activity_at) || a.c.name.localeCompare(b.c.name);
@@ -1596,6 +1615,13 @@ function ClientSuccessTable({
           </th>
           <th className={'sortable' + (sortBy?.col === 'plan' ? ' sorted' : '')} onClick={() => cycleSort('plan')}>
             Plan <em className="sort-icon">{sortIcon('plan')}</em>
+          </th>
+          <th
+            className={'sortable cs-num' + (sortBy?.col === 'score' ? ' sorted' : '')}
+            onClick={() => cycleSort('score')}
+            title="0–10 rating over the last 8 weeks. Higher = hits weekly target more consistently and with more headroom."
+          >
+            Score <em className="sort-icon">{sortIcon('score')}</em>
           </th>
           <th className={'sortable' + (sortBy?.col === 'tz' ? ' sorted' : '')} onClick={() => cycleSort('tz')}>
             Time Zone <em className="sort-icon">{sortIcon('tz')}</em>
@@ -1632,7 +1658,7 @@ function ClientSuccessTable({
         </tr>
       </thead>
       <tbody>
-        {sorted.map(({ c, hiredTotal, lastHireAt }) => {
+        {sorted.map(({ c, hiredTotal, lastHireAt, score }) => {
           const tzShort = c.time_zone ? (TZ_SHORT_BY_VALUE[c.time_zone] ?? c.time_zone) : null;
           return (
             <tr key={c.id}>
@@ -1641,6 +1667,11 @@ function ClientSuccessTable({
               </td>
               <td>
                 <span className={`plan-badge ${PLAN_BADGE_CLASS[c.plan]}`}>{PLAN_LABEL[c.plan]}</span>
+              </td>
+              <td className="cs-num">
+                {score === null
+                  ? <span className="cs-none">—</span>
+                  : <span className={`cs-score ${scoreClass(score)}`}>{score.toFixed(1)}</span>}
               </td>
               <td>
                 {tzShort

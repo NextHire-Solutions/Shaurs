@@ -146,6 +146,58 @@ export function daysUntil(target: Date, today: Date = new Date()): number {
   return Math.round((t1.getTime() - t0.getTime()) / 86400000);
 }
 
+// Client Score — 0.0–10.0 rating of how easily a client hits their weekly
+// intros target over the last SCORE_WINDOW_WEEKS. Two blended signals:
+//   hitRate   = fraction of usable weeks where intros >= weekly_target (0..1)
+//   avgRatio  = mean of min(intros / weekly_target, 2.0) across the same weeks
+// Combined:  score = 10 * (0.7 * hitRate + 0.15 * avgRatio)
+//   → 0.7 rewards consistency, 0.15 (max 0.3) rewards volume above target,
+//     capped at 2× target so a single huge week doesn't dominate.
+// Anchors: always ≥2× target → 10.0, always exactly at target → 8.5,
+// zero every week → 0.0. Returns null when fewer than SCORE_MIN_WEEKS
+// usable weeks are present (brand-new clients don't get a misleading score).
+export interface ClientScore {
+  score: number | null;  // 0.0–10.0 rounded to 1 decimal, null when < SCORE_MIN_WEEKS
+  weeksUsed: number;
+  hitRate: number;
+  avgRatio: number;
+}
+const SCORE_WINDOW_WEEKS = 8;
+const SCORE_MIN_WEEKS = 3;
+const RATIO_CAP = 2.0;
+export function clientScore(
+  metricsByWeek: Record<string, WeeklyMetric>,
+  weeklyTarget: number,
+  today: Date = new Date(),
+): ClientScore {
+  if (weeklyTarget <= 0) {
+    return { score: null, weeksUsed: 0, hitRate: 0, avgRatio: 0 };
+  }
+  const anchor = getMondayOf(today);
+  const usable: number[] = [];
+  for (let i = 0; i < SCORE_WINDOW_WEEKS; i++) {
+    const wk = weekKey(addDays(anchor, -7 * i));
+    const m = metricsByWeek[wk];
+    if (!m) continue;
+    usable.push(m.intros_corofy ?? 0);
+  }
+  if (usable.length < SCORE_MIN_WEEKS) {
+    return { score: null, weeksUsed: usable.length, hitRate: 0, avgRatio: 0 };
+  }
+  const hits = usable.filter((n) => n >= weeklyTarget).length;
+  const hitRate = hits / usable.length;
+  const avgRatio =
+    usable.reduce((s, n) => s + Math.min(n / weeklyTarget, RATIO_CAP), 0) /
+    usable.length;
+  const raw = 10 * (0.7 * hitRate + 0.15 * avgRatio);
+  return {
+    score: Math.round(raw * 10) / 10,
+    weeksUsed: usable.length,
+    hitRate,
+    avgRatio,
+  };
+}
+
 // Intros in the last 14 days = current Monday-week + previous Monday-week
 // buckets. Independent of the client's billing interval.
 export function biweeklyIntros(
