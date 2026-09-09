@@ -36,7 +36,7 @@ type Filter = 'all' | 'risk' | 'ok' | 'done' | 'active' | 'paused' | 'inactive' 
 
 type PlanFilter = 'all' | 'minimum' | 'production' | 'partner';
 
-type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'today' | 'progress' | 'intros' | 'interested' | 'conv' | 'converted' | 'convRate' | 'tz' | 'monthly';
+type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'today' | 'progress' | 'intros' | 'interested' | 'conv' | 'converted' | 'convRate' | 'tz' | 'monthly' | 'billing';
 type SortBy = null | { col: SortCol; dir: 'desc' | 'asc' };
 
 // Funnel-based conversion helpers. Both Corofy labels are mutually exclusive
@@ -322,6 +322,24 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         if (a.monthly_target === 0) return 1;
         if (b.monthly_target === 0) return -1;
         return mul * (b.intros_this_month - a.intros_this_month);
+      });
+    } else if (sortBy?.col === 'billing') {
+      // Sort by NEXT billing date. Clients with no anchor + no start_date can't
+      // compute a billing date and always sink to the bottom.
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
+      const next = (c: DashboardClient) => nextBillingDate(
+        c.billing_anchor_date ?? c.start_date,
+        c.billing_interval,
+        new Date(),
+        c.billing_interval_days,
+      );
+      list = [...list].sort((a, b) => {
+        const na = next(a);
+        const nb = next(b);
+        if (!na && !nb) return a.name.localeCompare(b.name);
+        if (!na) return 1;
+        if (!nb) return -1;
+        return mul * (nb.getTime() - na.getTime());
       });
     } else if (sortBy?.col === 'conv') {
       // Null convPct (client with no emails this week) always sinks to the bottom.
@@ -882,6 +900,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       title="Sort by last intro time — click to cycle desc / asc / reset"
                     >
                       Last Intro <em className="sort-icon">{sortIcon('lastIntro')}</em>
+                    </th>
+                    <th
+                      className={'sortable' + (sortBy?.col === 'billing' ? ' sorted' : '')}
+                      onClick={() => cycleSort('billing')}
+                      title="Sort by next billing date — click to cycle desc / asc / reset"
+                    >
+                      Billing Date <em className="sort-icon">{sortIcon('billing')}</em>
                     </th>
                     <th
                       className={'sortable' + (sortBy?.col === 'today' ? ' sorted' : '')}
@@ -1905,6 +1930,23 @@ function ClientRow({
   // (already used by the Bi-Weekly view + Client Success tab).
   const tzShortWeekly = client.time_zone ? (TZ_SHORT_BY_VALUE[client.time_zone] ?? client.time_zone) : null;
 
+  // Next billing date — same computation the Bi-Weekly view uses. When no
+  // anchor + no start_date the date can't be derived; renders a "Set" button
+  // that opens the Edit modal so it can be filled in one click.
+  const billingDate = nextBillingDate(
+    client.billing_anchor_date ?? client.start_date,
+    client.billing_interval,
+    new Date(),
+    client.billing_interval_days,
+  );
+  const billingCell = billingDate ? (
+    <span className="cs-date">
+      {`${String(billingDate.getUTCMonth() + 1).padStart(2, '0')}/${String(billingDate.getUTCDate()).padStart(2, '0')}/${billingDate.getUTCFullYear()}`}
+    </span>
+  ) : (
+    <button className="set-date-link" onClick={onEdit}>Set billing date</button>
+  );
+
   // interested cell — all-time count across every weekly_metrics row this
   // client has (sums interested_corofy across the loaded HISTORICAL_WEEKS window).
   const interestedAllTime = Object.values(client.metricsByWeek).reduce(
@@ -2114,6 +2156,7 @@ function ClientRow({
       </td>
       <td>{monthlyCell}</td>
       <td>{lastIntroCell}</td>
+      <td>{billingCell}</td>
       <td>{todayCell}</td>
       <td>{emailsCell}</td>
       <td>{introsCell}</td>
