@@ -516,6 +516,10 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
     const monthlyCompletionPct = monthlyTarget > 0 ? Math.round((monthlyIntros / monthlyTarget) * 100) : 0;
     const replyRatePct = campaignEmailsSent > 0 ? ((campaignReplies / campaignEmailsSent) * 100).toFixed(1) + '%' : '—';
     const positiveReplyPct = campaignReplies > 0 ? ((campaignInterested / campaignReplies) * 100).toFixed(1) + '%' : '—';
+    // Lifetime Avg Conv. — matches the Funnel row's all-lifetime cadence.
+    // convertedTotal is the 26-week intros sum (functionally lifetime for
+    // this dashboard); campaignEmailsSent is the true lifetime email count.
+    const lifetimeConvPer1k = campaignEmailsSent > 0 ? ((convertedTotal / campaignEmailsSent) * 1000).toFixed(1) + '%' : '—';
     return {
       total,
       risk,
@@ -532,6 +536,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       monthlyCompletionPct,
       replyRatePct,
       positiveReplyPct,
+      lifetimeConvPer1k,
       campaignEmailsSent,
       conv: convDen > 0 ? ((convNum / convDen) * 1000).toFixed(1) + '%' : '—',
       // Raw avg (per-1k units, matches the displayed number) for row color logic.
@@ -841,12 +846,12 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
           <div className="summary-group">
             <div className="summary-group-label">Funnel</div>
             <div className="summary-group-row">
-              <SummaryCard label="Emails Sent" cls="n-emails" num={summary.emails.toLocaleString()} sub="this week, all clients" />
-              <SummaryCard label="Reply Rate" cls="n-conv" num={summary.replyRatePct} sub="lifetime, all campaigns" />
-              <SummaryCard label="Positive Reply" cls="n-conv" num={summary.positiveReplyPct} sub="interested / replies (raw)" />
-              <SummaryCard label="Avg Conv." cls="n-conv" num={summary.conv} sub="1k email → intro" />
-              <SummaryCard label="Converted" cls="n-converted" num={summary.convertedTotal} sub="interested → intro leads" />
-              <SummaryCard label="Int → Intro" cls="n-conv-rate" num={summary.convRatePct} sub="of total funnel" />
+              <SummaryCard label="Emails Sent" cls="n-emails" num={summary.campaignEmailsSent.toLocaleString()} sub="lifetime, all campaigns" />
+              <SummaryCard label="Reply Rate" cls="n-conv" num={summary.replyRatePct} sub="lifetime, replies / emails" />
+              <SummaryCard label="Positive Reply" cls="n-conv" num={summary.positiveReplyPct} sub="lifetime, interested / replies" />
+              <SummaryCard label="Avg Conv." cls="n-conv" num={summary.lifetimeConvPer1k} sub="lifetime, 1k emails → intro" />
+              <SummaryCard label="Converted" cls="n-converted" num={summary.convertedTotal} sub="lifetime, interested → intro" />
+              <SummaryCard label="Int → Intro" cls="n-conv-rate" num={summary.convRatePct} sub="lifetime, of total funnel" />
             </div>
           </div>
         </div>
