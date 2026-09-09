@@ -916,13 +916,6 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       Daily Emails Sent <em className="sort-icon">{sortIcon('today')}</em>
                     </th>
                     <th
-                      className={'sortable' + (sortBy?.col === 'emails' ? ' sorted' : '')}
-                      onClick={() => cycleSort('emails')}
-                      title="Sort by emails sent this week — click to cycle desc / asc / reset"
-                    >
-                      Emails Sent <em className="sort-icon">{sortIcon('emails')}</em>
-                    </th>
-                    <th
                       className={'sortable' + (sortBy?.col === 'intros' ? ' sorted' : '')}
                       onClick={() => cycleSort('intros')}
                       title="Sort by intros this week — click to cycle desc / asc / reset"
@@ -1892,13 +1885,6 @@ function ClientRow({
     <span className="api-none">—</span>
   );
 
-  // emails cell
-  const emailsCell = d.emails > 0 ? (
-    <span className="api-num">{d.emails.toLocaleString()}</span>
-  ) : (
-    <span className="api-none">—</span>
-  );
-
   // intros cell — read-only number from MasterInbox
   const introClass = client.weekly_target === 0 ? '' : d.metTarget ? 'ok' : 'risk';
   const introsCell = (
@@ -2158,7 +2144,6 @@ function ClientRow({
       <td>{lastIntroCell}</td>
       <td>{billingCell}</td>
       <td>{todayCell}</td>
-      <td>{emailsCell}</td>
       <td>{introsCell}</td>
       <td>{convCell}</td>
       <td>{leftCell}</td>
