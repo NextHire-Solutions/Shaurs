@@ -74,6 +74,8 @@ export interface Client {
   // Monthly-target fields (migration 0013):
   monthly_target: number;                // per-client goal for one monthly cycle; 0 = unset
   intros_this_month: number;             // Introduction-feed rows since the current monthly-cycle start
+  // Portal deep-link (migration 0014):
+  portal_url: string | null;             // mirror of Corofy portals.portal_url; null when no portal
 }
 
 export interface WeeklyMetric {

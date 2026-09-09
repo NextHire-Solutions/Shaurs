@@ -40,6 +40,7 @@ interface ClientRow {
   intros_since_last_billing: number | null;
   monthly_target: number | null;
   intros_this_month: number | null;
+  portal_url: string | null;
 }
 
 export async function loadDashboardClients(): Promise<{
@@ -165,6 +166,7 @@ export async function loadDashboardClients(): Promise<{
       intros_since_last_billing: c.intros_since_last_billing ?? 0,
       monthly_target: c.monthly_target ?? 0,
       intros_this_month: c.intros_this_month ?? 0,
+      portal_url: c.portal_url ?? null,
       campaigns: linkedCampaigns,
       bisonCampaigns: linkedBison,
       metricsByWeek: metricsByClient.get(c.id) ?? {},

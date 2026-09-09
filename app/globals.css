@@ -75,6 +75,17 @@ main { max-width: none; margin: 0 auto; padding: 24px 32px; }
 .summary-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.7px; color: var(--text-muted); margin-bottom: 8px; }
 .summary-num   { font-size: 32px; font-weight: 900; letter-spacing: -1.5px; line-height: 1; margin-bottom: 3px; }
 .summary-sub   { font-size: 11px; color: var(--text-muted); }
+
+/* Grouped top-reporting rows — Status / Performance / Funnel */
+.summary-groups { display: flex; flex-direction: column; gap: 16px; margin-bottom: 24px; }
+.summary-group { display: flex; flex-direction: column; gap: 8px; }
+.summary-group-label { font-size: 13px; font-weight: 700; letter-spacing: 0.3px; color: var(--text); text-transform: none; }
+.summary-group-row { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+@media (max-width: 1200px) { .summary-group-row { grid-template-columns: repeat(3, 1fr); } }
+
+/* Portal deep-link arrow icon next to the client name */
+.portal-link { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 5px; text-decoration: none; color: var(--blue); font-size: 12px; line-height: 1.2; font-weight: 700; opacity: 0.7; transition: opacity 0.15s, background 0.15s; }
+.portal-link:hover { opacity: 1; background: var(--blue-pale); }
 .n-total  { color: var(--text); }
 .n-risk   { color: var(--red); }
 .n-ok     { color: var(--yellow); }

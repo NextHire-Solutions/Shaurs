@@ -863,6 +863,10 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
           // with a FUB-polluted timestamp from before the client_activity_at
           // rollout.
           const lastActivity = portal?.last_client_activity_at ?? null;
+          // Portal deep-link — mirrored so the dashboard can render a link-out
+          // icon next to the client name without hitting Corofy's API from the
+          // browser.
+          const portalUrl = portal?.portal_url ?? null;
           const { error } = await sb
             .from('clients')
             .update({
@@ -871,6 +875,7 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
               dnc_count: dncCount,
               agents_count: agentsCount,
               last_lead_activity_at: lastActivity,
+              portal_url: portalUrl,
             })
             .eq('id', c.id);
           if (error) {

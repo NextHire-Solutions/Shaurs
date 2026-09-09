@@ -36,6 +36,8 @@ import {
 type Filter = 'all' | 'risk' | 'ok' | 'done' | 'active' | 'paused' | 'inactive' | 'client-paused' | 'hidden';
 
 type PlanFilter = 'all' | 'minimum' | 'production' | 'partner';
+type TzFilter = 'all' | string; // 'all' or an IANA value from TIME_ZONES
+type BillingWindowFilter = 'all' | '7' | '14' | '30'; // any / within 7d / 14d / 30d
 
 type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'today' | 'progress' | 'intros' | 'interested' | 'conv' | 'converted' | 'convRate' | 'tz' | 'monthly' | 'billing' | 'billingDays' | 'lastBilling';
 type SortBy = null | { col: SortCol; dir: 'desc' | 'asc' };
@@ -130,6 +132,8 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
   const [currentMonday, setCurrentMonday] = useState<Date>(() => getMondayOf(new Date()));
   const [filter, setFilter] = useState<Filter>('all');
   const [planFilter, setPlanFilter] = useState<PlanFilter>('all');
+  const [tzFilter, setTzFilter] = useState<TzFilter>('all');
+  const [billingWindowFilter, setBillingWindowFilter] = useState<BillingWindowFilter>('all');
   // Unified sort state. null = default order (server-provided name asc).
   // { col, dir: 'desc' } = 1st click; { col, dir: 'asc' } = 2nd click; null = 3rd.
   const [sortBy, setSortBy] = useState<SortBy>(null);
@@ -228,6 +232,24 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
     // Plan filter (orthogonal to the other filter pills).
     if (planFilter !== 'all') {
       list = list.filter((c) => c.plan === planFilter);
+    }
+    if (tzFilter !== 'all') {
+      list = list.filter((c) => c.time_zone === tzFilter);
+    }
+    if (billingWindowFilter !== 'all') {
+      const days = parseInt(billingWindowFilter, 10);
+      const now = new Date();
+      list = list.filter((c) => {
+        const bd = nextBillingDate(
+          c.billing_anchor_date ?? c.start_date,
+          c.billing_interval,
+          now,
+          c.billing_interval_days,
+        );
+        if (!bd) return false;
+        const du = daysUntil(bd, now);
+        return du >= 0 && du <= days;
+      });
     }
     // Date-range filter (applied after subset filtering, before sorts).
     if (dateRange.from || dateRange.to) {
@@ -396,7 +418,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       });
     }
     return list;
-  }, [clients, filter, planFilter, sortBy, dateRange, search, key]);
+  }, [clients, filter, planFilter, tzFilter, billingWindowFilter, sortBy, dateRange, search, key]);
 
   // 1st click = desc (highest first), 2nd = asc, 3rd = reset.
   function cycleSort(col: SortCol) {
@@ -451,6 +473,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
     // Funnel totals (Interested → Introduction). All-time across HISTORICAL_WEEKS.
     let convertedTotal = 0;
     let interestedTotal = 0;
+    // Monthly aggregates (per-client current monthly cycle).
+    let monthlyIntros = 0;
+    let monthlyTarget = 0;
+    // Campaign-level aggregates powering Reply Rate + Positive Reply Rate.
+    let campaignReplies = 0;      // sum of reply_count across every campaign
+    let campaignInterested = 0;   // sum of interested_count
+    let campaignEmailsSent = 0;   // sum of emails_sent_total (Instantly + Bison)
     clients.forEach((c) => {
       if (c.hidden) return;
       if (c.client_paused) {
@@ -474,12 +503,19 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         convertedTotal += m.intros_corofy ?? 0;
         interestedTotal += m.interested_corofy ?? 0;
       }
+      monthlyIntros += c.intros_this_month ?? 0;
+      monthlyTarget += c.monthly_target ?? 0;
+      for (const camp of [...c.campaigns, ...c.bisonCampaigns]) {
+        campaignReplies += camp.reply_count ?? 0;
+        campaignInterested += camp.interested_count ?? 0;
+        campaignEmailsSent += camp.emails_sent_total ?? 0;
+      }
     });
     const totalFunnel = convertedTotal + interestedTotal;
-    // Completion % — aggregate intros this week vs aggregate weekly target
-    // across the same (non-hidden, non-paused) roster the intros/target
-    // cards use. 0 when no target has been set.
     const completionPct = target > 0 ? Math.round((intros / target) * 100) : 0;
+    const monthlyCompletionPct = monthlyTarget > 0 ? Math.round((monthlyIntros / monthlyTarget) * 100) : 0;
+    const replyRatePct = campaignEmailsSent > 0 ? ((campaignReplies / campaignEmailsSent) * 100).toFixed(1) + '%' : '—';
+    const positiveReplyPct = campaignReplies > 0 ? ((campaignInterested / campaignReplies) * 100).toFixed(1) + '%' : '—';
     return {
       total,
       risk,
@@ -491,6 +527,12 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       clientPaused,
       plans,
       completionPct,
+      monthlyIntros,
+      monthlyTarget,
+      monthlyCompletionPct,
+      replyRatePct,
+      positiveReplyPct,
+      campaignEmailsSent,
       conv: convDen > 0 ? ((convNum / convDen) * 1000).toFixed(1) + '%' : '—',
       // Raw avg (per-1k units, matches the displayed number) for row color logic.
       convAvg: convDen > 0 ? (convNum / convDen) * 1000 : 0,
@@ -605,6 +647,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             intros_since_last_billing: 0,
             monthly_target: modal.monthlyTarget,
             intros_this_month: 0,
+            portal_url: null,
             campaigns: [],
             bisonCampaigns: [],
             metricsByWeek: {},
@@ -765,30 +808,47 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
           <div className="past-week-banner show">📅 Viewing a past week — data is read-only.</div>
         )}
 
-        <div className="summary">
-          <SummaryCard label="Clients" cls="n-total" num={summary.total} sub="active" />
-          <SummaryCard label="At Risk" cls="n-risk" num={summary.risk} sub="below half target" />
-          <SummaryCard label="On Track" cls="n-ok" num={summary.ok} sub="meeting target this week" />
-          <SummaryCard label="Done" cls="n-done" num={summary.done} sub="met weekly target" />
-          <SummaryCard label="Intros Sent" cls="n-intros" num={summary.intros} sub="across all clients" />
-          <SummaryCard label="Intros Target" cls="n-target" num={summary.target} sub="weekly across all clients" />
-          <SummaryCard label="Completion" cls="n-completion" num={`${summary.completionPct}%`} sub="intros vs weekly target" />
-          <SummaryCard label="Client Paused" cls="n-cpaused" num={summary.clientPaused} sub="manually paused" />
-          <SummaryCard
-            label="By Plan"
-            cls="n-plan"
-            num={`${summary.plans.minimum} · ${summary.plans.production} · ${summary.plans.partner}`}
-            sub="min · prod · partner"
-          />
-          <SummaryCard
-            label="Emails Sent"
-            cls="n-emails"
-            num={summary.emails.toLocaleString()}
-            sub="across all clients"
-          />
-          <SummaryCard label="Avg Conv." cls="n-conv" num={summary.conv} sub="1k email → intro" />
-          <SummaryCard label="Converted" cls="n-converted" num={summary.convertedTotal} sub="interested → intro leads" />
-          <SummaryCard label="Int → Intro" cls="n-conv-rate" num={summary.convRatePct} sub="of total funnel" />
+        <div className="summary-groups">
+          <div className="summary-group">
+            <div className="summary-group-label">Status</div>
+            <div className="summary-group-row">
+              <SummaryCard label="Clients" cls="n-total" num={summary.total} sub="active" />
+              <SummaryCard label="At Risk" cls="n-risk" num={summary.risk} sub="below half target" />
+              <SummaryCard label="On Track" cls="n-ok" num={summary.ok} sub="meeting target this week" />
+              <SummaryCard label="Done" cls="n-done" num={summary.done} sub="met weekly target" />
+              <SummaryCard label="Client Paused" cls="n-cpaused" num={summary.clientPaused} sub="manually paused" />
+              <SummaryCard
+                label="By Plan"
+                cls="n-plan"
+                num={`${summary.plans.minimum} · ${summary.plans.production} · ${summary.plans.partner}`}
+                sub="min · prod · partner"
+              />
+            </div>
+          </div>
+
+          <div className="summary-group">
+            <div className="summary-group-label">Performance</div>
+            <div className="summary-group-row">
+              <SummaryCard label="Weekly Intros Sent" cls="n-intros" num={summary.intros} sub="across all clients" />
+              <SummaryCard label="Weekly Target" cls="n-target" num={summary.target} sub="intros / week" />
+              <SummaryCard label="Weekly Completion" cls="n-completion" num={`${summary.completionPct}%`} sub="intros vs weekly target" />
+              <SummaryCard label="Monthly Intros Sent" cls="n-intros" num={summary.monthlyIntros} sub="this monthly cycle" />
+              <SummaryCard label="Monthly Target" cls="n-target" num={summary.monthlyTarget} sub="intros / month" />
+              <SummaryCard label="Monthly Completion" cls="n-completion" num={`${summary.monthlyCompletionPct}%`} sub="intros vs monthly target" />
+            </div>
+          </div>
+
+          <div className="summary-group">
+            <div className="summary-group-label">Funnel</div>
+            <div className="summary-group-row">
+              <SummaryCard label="Emails Sent" cls="n-emails" num={summary.campaignEmailsSent.toLocaleString()} sub="all campaigns, all time" />
+              <SummaryCard label="Reply Rate" cls="n-conv" num={summary.replyRatePct} sub="replies / emails sent" />
+              <SummaryCard label="Positive Reply" cls="n-conv" num={summary.positiveReplyPct} sub="interested / replies" />
+              <SummaryCard label="Avg Conv." cls="n-conv" num={summary.conv} sub="1k email → intro" />
+              <SummaryCard label="Converted" cls="n-converted" num={summary.convertedTotal} sub="interested → intro leads" />
+              <SummaryCard label="Int → Intro" cls="n-conv-rate" num={summary.convRatePct} sub="of total funnel" />
+            </div>
+          </div>
         </div>
 
         <div className="table-wrap">
@@ -818,10 +878,10 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               <button className={'fpill f-ok' + (filter === 'ok' ? ' active' : '')} onClick={() => setFilter('ok')}>On Track</button>
               <button className={'fpill f-ok' + (filter === 'done' ? ' active' : '')} onClick={() => setFilter('done')} title="Clients who reached their weekly intro target">Done</button>
               <button className={'fpill' + (filter === 'active' ? ' active' : '')} onClick={() => setFilter('active')} title="Clients with at least one running campaign">Active</button>
-              <button className={'fpill' + (filter === 'paused' ? ' active' : '')} onClick={() => setFilter('paused')} title="Clients whose campaigns are paused or finished (no running)">Paused</button>
+              <button className={'fpill' + (filter === 'paused' ? ' active' : '')} onClick={() => setFilter('paused')} title="Clients whose campaigns are paused or finished (no running)">Campaign Paused</button>
               <button className={'fpill' + (filter === 'inactive' ? ' active' : '')} onClick={() => setFilter('inactive')} title="Clients with no campaign launched yet">Inactive</button>
               <button className={'fpill' + (filter === 'client-paused' ? ' active' : '')} onClick={() => setFilter('client-paused')} title="Clients you've manually paused">Client Paused</button>
-              <button className={'fpill' + (filter === 'hidden' ? ' active' : '')} onClick={() => setFilter('hidden')} title="Only churned clients">Churn</button>
+              <button className={'fpill' + (filter === 'hidden' ? ' active' : '')} onClick={() => setFilter('hidden')} title="Only churned clients">Clients Churned</button>
               <select
                 className={'plan-select' + (planFilter !== 'all' ? ' active' : '')}
                 value={planFilter}
@@ -832,6 +892,28 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                 <option value="minimum">Minimum</option>
                 <option value="production">Production</option>
                 <option value="partner">Partner</option>
+              </select>
+              <select
+                className={'plan-select' + (tzFilter !== 'all' ? ' active' : '')}
+                value={tzFilter}
+                onChange={(e) => setTzFilter(e.target.value as TzFilter)}
+                title="Filter by time zone"
+              >
+                <option value="all">All Time Zones</option>
+                {TIME_ZONES.map((tz) => (
+                  <option key={tz.value} value={tz.value}>{tz.short}</option>
+                ))}
+              </select>
+              <select
+                className={'plan-select' + (billingWindowFilter !== 'all' ? ' active' : '')}
+                value={billingWindowFilter}
+                onChange={(e) => setBillingWindowFilter(e.target.value as BillingWindowFilter)}
+                title="Filter by next billing date"
+              >
+                <option value="all">Any Billing</option>
+                <option value="7">Next 7 days</option>
+                <option value="14">Next 14 days</option>
+                <option value="30">Next 30 days</option>
               </select>
               <div style={{ position: 'relative' }}>
                 <button
@@ -955,7 +1037,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       onClick={() => cycleSort('billing')}
                       title="Sort by next billing date — click to cycle desc / asc / reset"
                     >
-                      Billing Date <em className="sort-icon">{sortIcon('billing')}</em>
+                      Next Billing <em className="sort-icon">{sortIcon('billing')}</em>
                     </th>
                     <th
                       className={'sortable' + (sortBy?.col === 'billingDays' ? ' sorted' : '')}
@@ -2180,7 +2262,17 @@ function ClientRow({
       <td className="client-cell">
         <div className="client-name">
           {client.name}
-          {client.hidden && <span className="hidden-badge">Churn</span>}
+          {client.portal_url && (
+            <a
+              className="portal-link"
+              href={client.portal_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Open client portal in Corofy"
+              onClick={(e) => e.stopPropagation()}
+            >↗</a>
+          )}
+          {client.hidden && <span className="hidden-badge">Churned</span>}
           {!client.hidden && client.client_paused && (
             <span className="client-paused-badge">Client Paused</span>
           )}
