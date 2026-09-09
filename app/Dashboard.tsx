@@ -841,9 +841,9 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
           <div className="summary-group">
             <div className="summary-group-label">Funnel</div>
             <div className="summary-group-row">
-              <SummaryCard label="Emails Sent" cls="n-emails" num={summary.campaignEmailsSent.toLocaleString()} sub="all campaigns, all time" />
-              <SummaryCard label="Reply Rate" cls="n-conv" num={summary.replyRatePct} sub="replies / emails sent" />
-              <SummaryCard label="Positive Reply" cls="n-conv" num={summary.positiveReplyPct} sub="interested / replies" />
+              <SummaryCard label="Emails Sent" cls="n-emails" num={summary.emails.toLocaleString()} sub="this week, all clients" />
+              <SummaryCard label="Reply Rate" cls="n-conv" num={summary.replyRatePct} sub="lifetime, all campaigns" />
+              <SummaryCard label="Positive Reply" cls="n-conv" num={summary.positiveReplyPct} sub="interested / replies (raw)" />
               <SummaryCard label="Avg Conv." cls="n-conv" num={summary.conv} sub="1k email → intro" />
               <SummaryCard label="Converted" cls="n-converted" num={summary.convertedTotal} sub="interested → intro leads" />
               <SummaryCard label="Int → Intro" cls="n-conv-rate" num={summary.convRatePct} sub="of total funnel" />
