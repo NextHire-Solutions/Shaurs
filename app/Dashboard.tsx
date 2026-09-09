@@ -36,7 +36,7 @@ type Filter = 'all' | 'risk' | 'ok' | 'done' | 'active' | 'paused' | 'inactive' 
 
 type PlanFilter = 'all' | 'minimum' | 'production' | 'partner';
 
-type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'today' | 'progress' | 'intros' | 'interested' | 'conv' | 'converted' | 'convRate' | 'tz' | 'monthly' | 'billing';
+type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'today' | 'progress' | 'intros' | 'interested' | 'conv' | 'converted' | 'convRate' | 'tz' | 'monthly' | 'billing' | 'billingDays';
 type SortBy = null | { col: SortCol; dir: 'desc' | 'asc' };
 
 // Funnel-based conversion helpers. Both Corofy labels are mutually exclusive
@@ -340,6 +340,28 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         if (!na) return 1;
         if (!nb) return -1;
         return mul * (nb.getTime() - na.getTime());
+      });
+    } else if (sortBy?.col === 'billingDays') {
+      // Sort by days-until-next-billing (fewer = more urgent). Same null-sink
+      // behavior as the 'billing' branch above.
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
+      const now = new Date();
+      const days = (c: DashboardClient) => {
+        const b = nextBillingDate(
+          c.billing_anchor_date ?? c.start_date,
+          c.billing_interval,
+          now,
+          c.billing_interval_days,
+        );
+        return b ? daysUntil(b, now) : null;
+      };
+      list = [...list].sort((a, b) => {
+        const da = days(a);
+        const db = days(b);
+        if (da === null && db === null) return a.name.localeCompare(b.name);
+        if (da === null) return 1;
+        if (db === null) return -1;
+        return mul * (db - da);
       });
     } else if (sortBy?.col === 'conv') {
       // Null convPct (client with no emails this week) always sinks to the bottom.
@@ -779,7 +801,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               <button className={'fpill' + (filter === 'paused' ? ' active' : '')} onClick={() => setFilter('paused')} title="Clients whose campaigns are paused or finished (no running)">Paused</button>
               <button className={'fpill' + (filter === 'inactive' ? ' active' : '')} onClick={() => setFilter('inactive')} title="Clients with no campaign launched yet">Inactive</button>
               <button className={'fpill' + (filter === 'client-paused' ? ' active' : '')} onClick={() => setFilter('client-paused')} title="Clients you've manually paused">Client Paused</button>
-              <button className={'fpill' + (filter === 'hidden' ? ' active' : '')} onClick={() => setFilter('hidden')} title="Only hidden clients">Hidden</button>
+              <button className={'fpill' + (filter === 'hidden' ? ' active' : '')} onClick={() => setFilter('hidden')} title="Only churned clients">Churn</button>
               <select
                 className={'plan-select' + (planFilter !== 'all' ? ' active' : '')}
                 value={planFilter}
@@ -907,6 +929,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       title="Sort by next billing date — click to cycle desc / asc / reset"
                     >
                       Billing Date <em className="sort-icon">{sortIcon('billing')}</em>
+                    </th>
+                    <th
+                      className={'sortable' + (sortBy?.col === 'billingDays' ? ' sorted' : '')}
+                      onClick={() => cycleSort('billingDays')}
+                      title="Sort by days until next billing — click to cycle desc / asc / reset"
+                    >
+                      Days Until Billing <em className="sort-icon">{sortIcon('billingDays')}</em>
                     </th>
                     <th
                       className={'sortable' + (sortBy?.col === 'today' ? ' sorted' : '')}
@@ -1933,6 +1962,17 @@ function ClientRow({
     <button className="set-date-link" onClick={onEdit}>Set billing date</button>
   );
 
+  // Days until next billing — same math the Bi-Weekly view uses. Urgent
+  // (≤ 3 days) gets the red days-urgent style; further out is plain.
+  const billingDays = billingDate ? daysUntil(billingDate, new Date()) : null;
+  const billingDaysCell = billingDays === null ? (
+    <span className="api-none">—</span>
+  ) : (
+    <span className={billingDays <= 3 ? 'days-urgent' : ''}>
+      {billingDays} day{billingDays === 1 ? '' : 's'}
+    </span>
+  );
+
   // interested cell — all-time count across every weekly_metrics row this
   // client has (sums interested_corofy across the loaded HISTORICAL_WEEKS window).
   const interestedAllTime = Object.values(client.metricsByWeek).reduce(
@@ -2110,7 +2150,7 @@ function ClientRow({
       <td className="client-cell">
         <div className="client-name">
           {client.name}
-          {client.hidden && <span className="hidden-badge">Hidden</span>}
+          {client.hidden && <span className="hidden-badge">Churn</span>}
           {!client.hidden && client.client_paused && (
             <span className="client-paused-badge">Client Paused</span>
           )}
@@ -2143,6 +2183,7 @@ function ClientRow({
       <td>{monthlyCell}</td>
       <td>{lastIntroCell}</td>
       <td>{billingCell}</td>
+      <td>{billingDaysCell}</td>
       <td>{todayCell}</td>
       <td>{introsCell}</td>
       <td>{convCell}</td>
