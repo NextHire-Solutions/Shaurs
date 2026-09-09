@@ -863,6 +863,27 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       Client <em className="sort-icon">{sortIcon('campaigns')}</em>
                     </th>
                     <th
+                      className={'sortable' + (sortBy?.col === 'tz' ? ' sorted' : '')}
+                      onClick={() => cycleSort('tz')}
+                      title="Sort by time zone — click to cycle desc / asc / reset"
+                    >
+                      Time Zone <em className="sort-icon">{sortIcon('tz')}</em>
+                    </th>
+                    <th
+                      className={'sortable' + (sortBy?.col === 'monthly' ? ' sorted' : '')}
+                      onClick={() => cycleSort('monthly')}
+                      title="Intros this monthly cycle (starts on the billing anchor day-of-month). — for clients with no monthly target set."
+                    >
+                      Monthly <em className="sort-icon">{sortIcon('monthly')}</em>
+                    </th>
+                    <th
+                      className={'sortable' + (sortBy?.col === 'lastIntro' ? ' sorted' : '')}
+                      onClick={() => cycleSort('lastIntro')}
+                      title="Sort by last intro time — click to cycle desc / asc / reset"
+                    >
+                      Last Intro <em className="sort-icon">{sortIcon('lastIntro')}</em>
+                    </th>
+                    <th
                       className={'sortable' + (sortBy?.col === 'today' ? ' sorted' : '')}
                       onClick={() => cycleSort('today')}
                       title="Sort by emails sent today (EST) — click to cycle desc / asc / reset"
@@ -884,13 +905,6 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       Intros This Week <em className="sort-icon">{sortIcon('intros')}</em>
                     </th>
                     <th
-                      className={'sortable' + (sortBy?.col === 'monthly' ? ' sorted' : '')}
-                      onClick={() => cycleSort('monthly')}
-                      title="Intros this monthly cycle (starts on the billing anchor day-of-month). — for clients with no monthly target set."
-                    >
-                      Monthly <em className="sort-icon">{sortIcon('monthly')}</em>
-                    </th>
-                    <th
                       className={'sortable' + (sortBy?.col === 'conv' ? ' sorted' : '')}
                       onClick={() => cycleSort('conv')}
                       title="Sort by conversion rate — click to cycle desc / asc / reset"
@@ -910,13 +924,6 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       title="Sort by average campaign progress — click to cycle desc / asc / reset"
                     >
                       Campaign Progress <em className="sort-icon">{sortIcon('progress')}</em>
-                    </th>
-                    <th
-                      className={'sortable' + (sortBy?.col === 'lastIntro' ? ' sorted' : '')}
-                      onClick={() => cycleSort('lastIntro')}
-                      title="Sort by last intro time — click to cycle desc / asc / reset"
-                    >
-                      Last Intro <em className="sort-icon">{sortIcon('lastIntro')}</em>
                     </th>
                     <th>Status</th>
                     <th
@@ -941,13 +948,6 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       Int → Intro <em className="sort-icon">{sortIcon('convRate')}</em>
                     </th>
                     <th>Plan</th>
-                    <th
-                      className={'sortable' + (sortBy?.col === 'tz' ? ' sorted' : '')}
-                      onClick={() => cycleSort('tz')}
-                      title="Sort by time zone — click to cycle desc / asc / reset"
-                    >
-                      Time Zone <em className="sort-icon">{sortIcon('tz')}</em>
-                    </th>
                     <th>Portal</th>
                     <th style={{ textAlign: 'right' }}>Actions</th>
                   </tr>
@@ -2107,24 +2107,24 @@ function ClientRow({
           {campsCount > 0 && <span className="client-meta-arrow">›</span>}
         </div>
       </td>
-      <td>{todayCell}</td>
-      <td>{emailsCell}</td>
-      <td>{introsCell}</td>
-      <td>{monthlyCell}</td>
-      <td>{convCell}</td>
-      <td>{leftCell}</td>
-      <td>{campaignCell}</td>
-      <td>{lastIntroCell}</td>
-      <td>{statusCell}</td>
-      <td>{interestedCell}</td>
-      <td>{convertedCell}</td>
-      <td>{convRateCell}</td>
-      <td><span className={`plan-badge ${PLAN_BADGE_CLASS[client.plan]}`}>{PLAN_LABEL[client.plan]}</span></td>
       <td>
         {tzShortWeekly
           ? <span className="cs-tz">{tzShortWeekly}</span>
           : <span className="api-none">—</span>}
       </td>
+      <td>{monthlyCell}</td>
+      <td>{lastIntroCell}</td>
+      <td>{todayCell}</td>
+      <td>{emailsCell}</td>
+      <td>{introsCell}</td>
+      <td>{convCell}</td>
+      <td>{leftCell}</td>
+      <td>{campaignCell}</td>
+      <td>{statusCell}</td>
+      <td>{interestedCell}</td>
+      <td>{convertedCell}</td>
+      <td>{convRateCell}</td>
+      <td><span className={`plan-badge ${PLAN_BADGE_CLASS[client.plan]}`}>{PLAN_LABEL[client.plan]}</span></td>
       <td>
         {client.portalActive
           ? <span className="portal-ok" title="Portal active in Corofy / MasterInbox">✓</span>

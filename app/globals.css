@@ -64,7 +64,7 @@ header { background: var(--white); border-bottom: 1px solid var(--border); paddi
 .btn-add:hover { background: var(--blue-dark); }
 
 /* MAIN */
-main { max-width: 1400px; margin: 0 auto; padding: 28px 24px; }
+main { max-width: none; margin: 0 auto; padding: 24px 32px; }
 
 .past-week-banner { display: none; align-items: center; gap: 10px; background: var(--yellow-bg); border: 1px solid var(--yellow-border); border-radius: 10px; padding: 10px 16px; margin-bottom: 20px; font-size: 13px; font-weight: 600; color: var(--yellow); }
 .past-week-banner.show { display: flex; }
