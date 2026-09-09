@@ -36,7 +36,7 @@ type Filter = 'all' | 'risk' | 'ok' | 'done' | 'active' | 'paused' | 'inactive' 
 
 type PlanFilter = 'all' | 'minimum' | 'production' | 'partner';
 
-type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'today' | 'progress' | 'intros' | 'interested' | 'conv' | 'converted' | 'convRate';
+type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'today' | 'progress' | 'intros' | 'interested' | 'conv' | 'converted' | 'convRate' | 'tz' | 'monthly';
 type SortBy = null | { col: SortCol; dir: 'desc' | 'asc' };
 
 // Funnel-based conversion helpers. Both Corofy labels are mutually exclusive
@@ -88,6 +88,7 @@ interface ModalState {
   plan: Plan;
   startDate: string;
   weeklyTarget: number;
+  monthlyTarget: number;
   billingAnchorDate: string;
   billingInterval: BillingInterval;
   // Free-text string while editing — parsed to int on save. Empty string
@@ -104,6 +105,7 @@ const emptyModal: ModalState = {
   plan: 'production',
   startDate: '',
   weeklyTarget: PLAN_DEFAULT_TARGET.production,
+  monthlyTarget: 0,
   billingAnchorDate: '',
   billingInterval: 'biweekly',
   billingIntervalDays: '',
@@ -134,7 +136,24 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
   const [datePreset, setDatePreset] = useState<DatePreset>(null);
   const [datePopoverOpen, setDatePopoverOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [view, setView] = useState<'weekly' | 'biweekly' | 'success'>('weekly');
+  /*
+   * The view is seeded from `?view=` so each of the three has an address.
+   *
+   * The workspace rail lists Weekly, Bi-Weekly and Client Success as separate
+   * destinations, and a rail item needs somewhere to point. Without this they
+   * all land on Weekly and two of the three look broken.
+   *
+   * Read from window.location rather than useSearchParams(): that hook opts the
+   * whole route into client-side rendering and needs a Suspense boundary above
+   * it, which is a lot of machinery for one initial value. A lazy initialiser
+   * runs once, on the client, after hydration — and the toggle below remains
+   * the way you switch, so this only decides where you arrive.
+   */
+  const [view, setView] = useState<'weekly' | 'biweekly' | 'success'>(() => {
+    if (typeof window === 'undefined') return 'weekly';
+    const requested = new URLSearchParams(window.location.search).get('view');
+    return requested === 'biweekly' || requested === 'success' ? requested : 'weekly';
+  });
   const [campaignSelections, setCampaignSelections] = useState<Record<string, string>>({});
   const [campaignsPopupClientId, setCampaignsPopupClientId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -284,6 +303,26 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         if (rb === null) return -1;
         return mul * (rb - ra);
       });
+    } else if (sortBy?.col === 'tz') {
+      // Empty time_zone rows sink to the bottom regardless of direction.
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
+      list = [...list].sort((a, b) => {
+        const at = a.time_zone ?? '';
+        const bt = b.time_zone ?? '';
+        if (!at && !bt) return a.name.localeCompare(b.name);
+        if (!at) return 1;
+        if (!bt) return -1;
+        return -mul * at.localeCompare(bt);
+      });
+    } else if (sortBy?.col === 'monthly') {
+      // Sort by intros_this_month; clients with monthly_target=0 (unset) sink to bottom.
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
+      list = [...list].sort((a, b) => {
+        if (a.monthly_target === 0 && b.monthly_target === 0) return a.name.localeCompare(b.name);
+        if (a.monthly_target === 0) return 1;
+        if (b.monthly_target === 0) return -1;
+        return mul * (b.intros_this_month - a.intros_this_month);
+      });
     } else if (sortBy?.col === 'conv') {
       // Null convPct (client with no emails this week) always sinks to the bottom.
       const mul = sortBy.dir === 'desc' ? 1 : -1;
@@ -426,6 +465,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       plan: c.plan,
       startDate: c.start_date ?? '',
       weeklyTarget: c.weekly_target,
+      monthlyTarget: c.monthly_target ?? 0,
       billingAnchorDate: c.billing_anchor_date ?? '',
       billingInterval: c.billing_interval ?? 'biweekly',
       billingIntervalDays: c.billing_interval_days != null ? String(c.billing_interval_days) : '',
@@ -457,6 +497,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       name,
       plan: modal.plan,
       weekly_target: modal.weeklyTarget,
+      monthly_target: modal.monthlyTarget,
       start_date: modal.startDate || null,
       instantly_campaign_ids: linkedIds,
       bison_campaign_ids: linkedBisonIds,
@@ -502,6 +543,8 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             last_lead_activity_at: null,
             stagnant_intros_count: 0,
             intros_since_last_billing: 0,
+            monthly_target: modal.monthlyTarget,
+            intros_this_month: 0,
             campaigns: [],
             bisonCampaigns: [],
             metricsByWeek: {},
@@ -841,6 +884,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       Intros This Week <em className="sort-icon">{sortIcon('intros')}</em>
                     </th>
                     <th
+                      className={'sortable' + (sortBy?.col === 'monthly' ? ' sorted' : '')}
+                      onClick={() => cycleSort('monthly')}
+                      title="Intros this monthly cycle (starts on the billing anchor day-of-month). — for clients with no monthly target set."
+                    >
+                      Monthly <em className="sort-icon">{sortIcon('monthly')}</em>
+                    </th>
+                    <th
                       className={'sortable' + (sortBy?.col === 'conv' ? ' sorted' : '')}
                       onClick={() => cycleSort('conv')}
                       title="Sort by conversion rate — click to cycle desc / asc / reset"
@@ -891,6 +941,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       Int → Intro <em className="sort-icon">{sortIcon('convRate')}</em>
                     </th>
                     <th>Plan</th>
+                    <th
+                      className={'sortable' + (sortBy?.col === 'tz' ? ' sorted' : '')}
+                      onClick={() => cycleSort('tz')}
+                      title="Sort by time zone — click to cycle desc / asc / reset"
+                    >
+                      Time Zone <em className="sort-icon">{sortIcon('tz')}</em>
+                    </th>
                     <th>Portal</th>
                     <th style={{ textAlign: 'right' }}>Actions</th>
                   </tr>
@@ -981,6 +1038,19 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               }
             />
             <div className="form-help">Drives the At Risk / On Track status. Defaults to plan tier (1/3/6) but you can override.</div>
+          </div>
+
+          <div className="form-group">
+            <label>Monthly Intros Target</label>
+            <input
+              type="number"
+              min={0}
+              value={modal.monthlyTarget}
+              onChange={(e) =>
+                setModal((m) => ({ ...m, monthlyTarget: parseInt(e.target.value || '0', 10) }))
+              }
+            />
+            <div className="form-help">Progress resets on the client&apos;s billing anchor day each calendar month. 0 hides the column.</div>
           </div>
 
           <div className="form-group">
@@ -1815,6 +1885,26 @@ function ClientRow({
     />
   );
 
+  // monthly progress — X / Y where X = intros_this_month, Y = monthly_target.
+  // Rendered as an X/Y pill with the same tier coloring the Bi-Weekly view uses
+  // (green when at or above target, orange at ≥ half, red below half). Missing
+  // target (0) renders as a muted em-dash so unset clients don't clutter the row.
+  const monthlyCell = client.monthly_target === 0 ? (
+    <span className="api-none">—</span>
+  ) : (
+    <span className={
+      client.intros_this_month >= client.monthly_target ? 'bw-done'
+      : client.intros_this_month >= Math.ceil(client.monthly_target / 2) ? 'bw-mid'
+      : 'bw-short'
+    }>
+      {client.intros_this_month}/{client.monthly_target}
+    </span>
+  );
+
+  // Time-zone short code for the Weekly view — reuses TZ_SHORT_BY_VALUE
+  // (already used by the Bi-Weekly view + Client Success tab).
+  const tzShortWeekly = client.time_zone ? (TZ_SHORT_BY_VALUE[client.time_zone] ?? client.time_zone) : null;
+
   // interested cell — all-time count across every weekly_metrics row this
   // client has (sums interested_corofy across the loaded HISTORICAL_WEEKS window).
   const interestedAllTime = Object.values(client.metricsByWeek).reduce(
@@ -2020,6 +2110,7 @@ function ClientRow({
       <td>{todayCell}</td>
       <td>{emailsCell}</td>
       <td>{introsCell}</td>
+      <td>{monthlyCell}</td>
       <td>{convCell}</td>
       <td>{leftCell}</td>
       <td>{campaignCell}</td>
@@ -2029,6 +2120,11 @@ function ClientRow({
       <td>{convertedCell}</td>
       <td>{convRateCell}</td>
       <td><span className={`plan-badge ${PLAN_BADGE_CLASS[client.plan]}`}>{PLAN_LABEL[client.plan]}</span></td>
+      <td>
+        {tzShortWeekly
+          ? <span className="cs-tz">{tzShortWeekly}</span>
+          : <span className="api-none">—</span>}
+      </td>
       <td>
         {client.portalActive
           ? <span className="portal-ok" title="Portal active in Corofy / MasterInbox">✓</span>

@@ -1,10 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
+import { requireRead, requireWrite } from '@/lib/route-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+// Auth is enforced HERE, not only in middleware.
+//
+// Master Inbox reads this route server-to-server (lib/portals/client-plan.ts)
+// with x-admin-token and no cookie. Once DASHBOARD_PASSWORD was set, the
+// middleware started refusing it — and Master Inbox swallows the error, so
+// every client's plan silently became null with nothing in any log.
+//
+// Reads now accept READ_ONLY_TOKEN. Writes never do: a token handed to
+// "lower-trust consumers" (its own words) must not be able to delete a client.
+
+export async function GET(req: NextRequest) {
+  const denied = await requireRead(req);
+  if (denied) return denied;
+
   const sb = getSupabase();
   const { data, error } = await sb.from('clients').select('*').order('name');
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -12,6 +26,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const denied = await requireWrite(req);
+  if (denied) return denied;
+
   const body = await req.json();
   const sb = getSupabase();
   const { data, error } = await sb
@@ -27,6 +44,7 @@ export async function POST(req: NextRequest) {
       billing_anchor_date: body.billing_anchor_date ?? null,
       billing_interval: body.billing_interval ?? 'biweekly',
       billing_interval_days: body.billing_interval_days ?? null,
+      monthly_target: body.monthly_target ?? 0,
     })
     .select()
     .single();
@@ -35,6 +53,9 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
+  const denied = await requireWrite(req);
+  if (denied) return denied;
+
   const body = await req.json();
   if (!body.id) return NextResponse.json({ error: 'id required' }, { status: 400 });
   const sb = getSupabase();
@@ -55,6 +76,7 @@ export async function PATCH(req: NextRequest) {
   if (body.billing_interval !== undefined) update.billing_interval = body.billing_interval;
   if (body.billing_interval_days !== undefined) update.billing_interval_days = body.billing_interval_days;
   if (body.time_zone !== undefined) update.time_zone = body.time_zone;
+  if (body.monthly_target !== undefined) update.monthly_target = body.monthly_target;
   const { data, error } = await sb
     .from('clients')
     .update(update)
@@ -66,6 +88,9 @@ export async function PATCH(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const denied = await requireWrite(req);
+  if (denied) return denied;
+
   const url = new URL(req.url);
   const id = url.searchParams.get('id');
   if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 });

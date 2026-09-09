@@ -107,6 +107,29 @@ export function lastBillingDate(
   }
 }
 
+// Compute the START of the CURRENT monthly cycle (calendar-month step from
+// the anchor). Independent of billing_interval — a biweekly-billed client
+// still has a well-defined "monthly cycle" for the monthly target column,
+// anchored to the same date that governs their billing.
+//
+// Example: anchor July 22, today Sep 3 → monthly cycles are 7/22 → 8/21,
+// 8/22 → 9/21. Current cycle start = 8/22. Anchor null or in the future → null.
+export function monthlyCycleStart(
+  anchorISO: string | null,
+  today: Date = new Date(),
+): Date | null {
+  if (!anchorISO) return null;
+  const anchor = asUTC(anchorISO);
+  if (anchor.getTime() > today.getTime()) return null;
+  const cursor = new Date(anchor);
+  while (true) {
+    const next = new Date(cursor);
+    next.setUTCMonth(next.getUTCMonth() + 1);
+    if (next.getTime() > today.getTime()) return cursor;
+    cursor.setTime(next.getTime());
+  }
+}
+
 // Compute the NEXT billing date based on anchor + interval. Returns null when
 // no anchor is provided (caller is expected to fall back to start_date), or
 // when interval='custom' but no positive day count is configured yet.

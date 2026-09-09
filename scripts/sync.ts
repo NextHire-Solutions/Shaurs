@@ -19,7 +19,7 @@ import {
   listBisonCampaigns,
   mapBisonStatus,
 } from '../lib/bison';
-import { addDays, getMondayOf, lastBillingDate, normalizeName, todayInET, weekKey } from '../lib/derive';
+import { addDays, getMondayOf, lastBillingDate, monthlyCycleStart, normalizeName, todayInET, weekKey } from '../lib/derive';
 import { listCorofyIntros } from '../lib/corofy';
 import { listCorofyPortals } from '../lib/portals';
 import { autoMatchCampaignIds } from '../lib/matchCampaigns';
@@ -594,17 +594,28 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
         const anchor = c.billing_anchor_date ?? c.start_date;
         const interval = c.billing_interval ?? 'biweekly';
         const lastBilling = lastBillingDate(anchor, interval, new Date(nowMs), c.billing_interval_days);
+        // Monthly cycle: independent of billing_interval — walks calendar
+        // months from the same anchor. Powers the Weekly view's "Monthly"
+        // column so a biweekly-billed client still gets a stable monthly
+        // window (anchor day-of-month → next anchor day-of-month).
+        const monthStart = monthlyCycleStart(anchor, new Date(nowMs));
         let intrsSince = 0;
         let stagnant = 0;
+        let intrsMonth = 0;
         // Current cycle starts the DAY AFTER the last billing day (the
         // billing day itself belongs to the outgoing cycle — that's when the
         // client is charged for it). Add 86.4M ms (24h) to skip the whole
         // billing day. lastBillingDate returns midnight UTC, so + 1 day
         // lands cleanly at midnight of the next day.
         const cycleStartMs = lastBilling ? lastBilling.getTime() + 86_400_000 : 0;
+        const monthStartMs = monthStart ? monthStart.getTime() : 0;
         for (const r of clientIntros) {
           const aMs = new Date(r.assigned_at).getTime();
           if (Number.isFinite(aMs) && cycleStartMs > 0 && aMs >= cycleStartMs) intrsSince++;
+          // Monthly-cycle-start is INCLUSIVE (anchor day is the first day of
+          // the new monthly cycle, unlike billing day which is the last day
+          // of the outgoing cycle).
+          if (Number.isFinite(aMs) && monthStartMs > 0 && aMs >= monthStartMs) intrsMonth++;
           // Prefer Corofy's client_activity_at (null == stagnant); fall back
           // to the old updated_at heuristic when the field is absent.
           if ('client_activity_at' in r) {
@@ -619,6 +630,7 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
           .update({
             intros_since_last_billing: intrsSince,
             stagnant_intros_count: stagnant,
+            intros_this_month: intrsMonth,
           })
           .eq('id', c.id);
         if (error) {
