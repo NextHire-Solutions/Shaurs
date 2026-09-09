@@ -11,6 +11,7 @@ import {
   formatWeek,
   getMondayOf,
   isCurrentWeek,
+  lastBillingDate,
   nextBillingDate,
   todayInET,
   weekKey,
@@ -36,7 +37,7 @@ type Filter = 'all' | 'risk' | 'ok' | 'done' | 'active' | 'paused' | 'inactive' 
 
 type PlanFilter = 'all' | 'minimum' | 'production' | 'partner';
 
-type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'today' | 'progress' | 'intros' | 'interested' | 'conv' | 'converted' | 'convRate' | 'tz' | 'monthly' | 'billing' | 'billingDays';
+type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'today' | 'progress' | 'intros' | 'interested' | 'conv' | 'converted' | 'convRate' | 'tz' | 'monthly' | 'billing' | 'billingDays' | 'lastBilling';
 type SortBy = null | { col: SortCol; dir: 'desc' | 'asc' };
 
 // Funnel-based conversion helpers. Both Corofy labels are mutually exclusive
@@ -322,6 +323,25 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         if (a.monthly_target === 0) return 1;
         if (b.monthly_target === 0) return -1;
         return mul * (b.intros_this_month - a.intros_this_month);
+      });
+    } else if (sortBy?.col === 'lastBilling') {
+      // Sort by MOST RECENT billing date on or before today. Null (anchor
+      // never reached) sinks to bottom.
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
+      const now = new Date();
+      const prev = (c: DashboardClient) => lastBillingDate(
+        c.billing_anchor_date ?? c.start_date,
+        c.billing_interval,
+        now,
+        c.billing_interval_days,
+      );
+      list = [...list].sort((a, b) => {
+        const pa = prev(a);
+        const pb = prev(b);
+        if (!pa && !pb) return a.name.localeCompare(b.name);
+        if (!pa) return 1;
+        if (!pb) return -1;
+        return mul * (pb.getTime() - pa.getTime());
       });
     } else if (sortBy?.col === 'billing') {
       // Sort by NEXT billing date. Clients with no anchor + no start_date can't
@@ -922,6 +942,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       title="Sort by last intro time — click to cycle desc / asc / reset"
                     >
                       Last Intro <em className="sort-icon">{sortIcon('lastIntro')}</em>
+                    </th>
+                    <th
+                      className={'sortable' + (sortBy?.col === 'lastBilling' ? ' sorted' : '')}
+                      onClick={() => cycleSort('lastBilling')}
+                      title="Sort by last (most recent) billing date — click to cycle desc / asc / reset"
+                    >
+                      Last Billing <em className="sort-icon">{sortIcon('lastBilling')}</em>
                     </th>
                     <th
                       className={'sortable' + (sortBy?.col === 'billing' ? ' sorted' : '')}
@@ -1945,19 +1972,22 @@ function ClientRow({
   // (already used by the Bi-Weekly view + Client Success tab).
   const tzShortWeekly = client.time_zone ? (TZ_SHORT_BY_VALUE[client.time_zone] ?? client.time_zone) : null;
 
-  // Next billing date — same computation the Bi-Weekly view uses. When no
-  // anchor + no start_date the date can't be derived; renders a "Set" button
-  // that opens the Edit modal so it can be filled in one click.
-  const billingDate = nextBillingDate(
-    client.billing_anchor_date ?? client.start_date,
-    client.billing_interval,
-    new Date(),
-    client.billing_interval_days,
+  // Next + last billing date — same computations the Bi-Weekly view uses.
+  // When no anchor + no start_date the date can't be derived; renders a
+  // "Set" button that opens the Edit modal so it can be filled in one click.
+  const fmtMDY = (d: Date) =>
+    `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}/${d.getUTCFullYear()}`;
+  const now_ = new Date();
+  const anchor_ = client.billing_anchor_date ?? client.start_date;
+  const lastBillingD = lastBillingDate(anchor_, client.billing_interval, now_, client.billing_interval_days);
+  const billingDate = nextBillingDate(anchor_, client.billing_interval, now_, client.billing_interval_days);
+  const lastBillingCell = lastBillingD ? (
+    <span className="cs-date">{fmtMDY(lastBillingD)}</span>
+  ) : (
+    <span className="api-none">—</span>
   );
   const billingCell = billingDate ? (
-    <span className="cs-date">
-      {`${String(billingDate.getUTCMonth() + 1).padStart(2, '0')}/${String(billingDate.getUTCDate()).padStart(2, '0')}/${billingDate.getUTCFullYear()}`}
-    </span>
+    <span className="cs-date">{fmtMDY(billingDate)}</span>
   ) : (
     <button className="set-date-link" onClick={onEdit}>Set billing date</button>
   );
@@ -2182,6 +2212,7 @@ function ClientRow({
       </td>
       <td>{monthlyCell}</td>
       <td>{lastIntroCell}</td>
+      <td>{lastBillingCell}</td>
       <td>{billingCell}</td>
       <td>{billingDaysCell}</td>
       <td>{todayCell}</td>
