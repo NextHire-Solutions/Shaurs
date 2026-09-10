@@ -504,9 +504,20 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         convNum += d.intros;
         convDen += d.emails;
       }
-      for (const m of Object.values(c.metricsByWeek)) {
-        convertedTotal += m.intros_corofy ?? 0;
-        interestedTotal += m.interested_corofy ?? 0;
+      // Prefer the all-time per-client counters (populated by sync-worker,
+      // no 26-week clip) when they carry a value; fall back to summing the
+      // weekly_metrics rows for clients whose counters haven't been backfilled
+      // yet. Once the next sync-worker tick runs, every active client has
+      // total_intros_corofy + total_interested_corofy > 0 and this fallback
+      // silently drops out.
+      if ((c.total_intros_corofy ?? 0) > 0 || (c.total_interested_corofy ?? 0) > 0) {
+        convertedTotal += c.total_intros_corofy ?? 0;
+        interestedTotal += c.total_interested_corofy ?? 0;
+      } else {
+        for (const m of Object.values(c.metricsByWeek)) {
+          convertedTotal += m.intros_corofy ?? 0;
+          interestedTotal += m.interested_corofy ?? 0;
+        }
       }
       const wkNow = c.metricsByWeek[key];
       if (wkNow) {
@@ -700,6 +711,8 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             monthly_target: modal.monthlyTarget,
             intros_this_month: 0,
             portal_url: null,
+            total_intros_corofy: 0,
+            total_interested_corofy: 0,
             campaigns: [],
             bisonCampaigns: [],
             metricsByWeek: {},

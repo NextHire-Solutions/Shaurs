@@ -649,6 +649,10 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
             intros_since_last_billing: intrsSince,
             stagnant_intros_count: stagnant,
             intros_this_month: intrsMonth,
+            // All-time Introduction count for this client, no 26-week clip.
+            // Powers the Funnel — Lifetime "Converted" number so it isn't
+            // truncated when a client has history older than the backfill.
+            total_intros_corofy: clientIntros.length,
           })
           .eq('id', c.id);
         if (error) {
@@ -683,11 +687,15 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
       interestedTotal = interestedRows.length;
       const byNameWeekI = new Map<string, { count: number; latest: number }>();
       const allTimeLatestI = new Map<string, number>();
+      // All-time count per client (no 26-week clip) — feeds
+      // clients.total_interested_corofy, which the Funnel Lifetime card sums.
+      const allTimeCountI = new Map<string, number>();
       for (const i of interestedRows) {
         const t = new Date(i.assigned_at).getTime();
         if (!Number.isFinite(t)) continue;
         const normKey = normalizeClientName(i.client_name);
         if ((allTimeLatestI.get(normKey) ?? 0) < t) allTimeLatestI.set(normKey, t);
+        allTimeCountI.set(normKey, (allTimeCountI.get(normKey) ?? 0) + 1);
         const wk = weekKey(new Date(t));
         if (!validWeekSet.has(wk)) continue;
         const k = `${normKey}|${wk}`;
@@ -724,6 +732,18 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
             .from('weekly_metrics')
             .upsert(interestedUpserts, { onConflict: 'client_id,week_key', ignoreDuplicates: false });
           if (error) console.warn(`[corofy] interested upsert failed: ${error.message}`);
+        }
+        // Persist all-time Interested counts on the clients table so the
+        // dashboard's Funnel Lifetime numerator isn't clipped by the 26-week
+        // weekly_metrics backfill window.
+        for (const c of clients as { id: string; name: string }[]) {
+          const normKey = normalizeName(c.name);
+          const total = allTimeCountI.get(normKey) ?? 0;
+          const { error } = await sb
+            .from('clients')
+            .update({ total_interested_corofy: total })
+            .eq('id', c.id);
+          if (error) console.warn(`[corofy] total_interested_corofy update failed for ${c.name}: ${error.message}`);
         }
       }
       console.warn(`[corofy] Interested rows bucketed: ${interestedTotal}`);

@@ -76,6 +76,10 @@ export interface Client {
   intros_this_month: number;             // Introduction-feed rows since the current monthly-cycle start
   // Portal deep-link (migration 0014):
   portal_url: string | null;             // mirror of Corofy portals.portal_url; null when no portal
+  // All-time Corofy label counts (migration 0016). Refreshed on every sync
+  // tick; NOT clipped to the 26-week weekly_metrics backfill window.
+  total_intros_corofy: number;
+  total_interested_corofy: number;
 }
 
 export interface WeeklyMetric {
