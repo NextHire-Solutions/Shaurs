@@ -108,18 +108,28 @@ export async function listBisonCampaigns(): Promise<BisonCampaignSummary[]> {
 // /sequence-steps, /stats) accept the INTEGER id only — passing the UUID 404s
 // silently. The list endpoint returns both `id` (int) and `uuid` (string); use
 // `id` here.
-export async function bisonDailySent(
+// Fetch both Sent and Replied series in one line-area-chart-stats call.
+export async function bisonDailyStats(
   intCampaignId: number,
   startDate: string,
   endDate: string
-): Promise<{ date: string; sent: number }[]> {
+): Promise<{ date: string; sent: number; replied: number }[]> {
   const resp = await get<BisonChartResp>(`/api/campaigns/${intCampaignId}/line-area-chart-stats`, {
     start_date: startDate,
     end_date: endDate,
   });
   const sent = (resp.data ?? []).find((s) => s.label === 'Sent');
-  if (!sent) return [];
-  return sent.dates.map(([date, n]) => ({ date, sent: Number(n) || 0 }));
+  const replied = (resp.data ?? []).find((s) => s.label === 'Replied');
+  const byDate = new Map<string, { sent: number; replied: number }>();
+  for (const [d, n] of sent?.dates ?? []) {
+    byDate.set(d, { sent: Number(n) || 0, replied: 0 });
+  }
+  for (const [d, n] of replied?.dates ?? []) {
+    const cur = byDate.get(d) ?? { sent: 0, replied: 0 };
+    cur.replied = Number(n) || 0;
+    byDate.set(d, cur);
+  }
+  return [...byDate.entries()].map(([date, v]) => ({ date, ...v }));
 }
 
 export function mapBisonStatus(raw: string | undefined | null): 'running' | 'paused' | 'finished' | null {

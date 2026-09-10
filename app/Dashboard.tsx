@@ -476,10 +476,15 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
     // Monthly aggregates (per-client current monthly cycle).
     let monthlyIntros = 0;
     let monthlyTarget = 0;
-    // Campaign-level aggregates powering Reply Rate + Positive Reply Rate.
+    // Campaign-level lifetime totals (sums from campaign-cache tables).
     let campaignReplies = 0;      // sum of reply_count across every campaign
-    let campaignInterested = 0;   // sum of interested_count
     let campaignEmailsSent = 0;   // sum of emails_sent_total (Instantly + Bison)
+    // This-week totals — pulled from the current week's weekly_metrics row per
+    // client. Same source of truth as the lifetime sums, just a single slice.
+    let weeklyEmails = 0;
+    let weeklyReplies = 0;
+    let weeklyIntros = 0;
+    let weeklyInterested = 0;
     clients.forEach((c) => {
       if (c.hidden) return;
       if (c.client_paused) {
@@ -503,23 +508,49 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         convertedTotal += m.intros_corofy ?? 0;
         interestedTotal += m.interested_corofy ?? 0;
       }
+      const wkNow = c.metricsByWeek[key];
+      if (wkNow) {
+        weeklyEmails += wkNow.emails_sent ?? 0;
+        weeklyReplies += wkNow.replies ?? 0;
+        weeklyIntros += wkNow.intros_corofy ?? 0;
+        weeklyInterested += wkNow.interested_corofy ?? 0;
+      }
       monthlyIntros += c.intros_this_month ?? 0;
       monthlyTarget += c.monthly_target ?? 0;
       for (const camp of [...c.campaigns, ...c.bisonCampaigns]) {
         campaignReplies += camp.reply_count ?? 0;
-        campaignInterested += camp.interested_count ?? 0;
         campaignEmailsSent += camp.emails_sent_total ?? 0;
       }
     });
     const totalFunnel = convertedTotal + interestedTotal;
+    const weeklyFunnel = weeklyIntros + weeklyInterested;
     const completionPct = target > 0 ? Math.round((intros / target) * 100) : 0;
     const monthlyCompletionPct = monthlyTarget > 0 ? Math.round((monthlyIntros / monthlyTarget) * 100) : 0;
+
+    // Lifetime Funnel — replies from campaigns table, interested from Corofy sum.
+    // Positive Reply now uses the full Corofy Interested count (not the
+    // campaign-attributed subset), which is why it moves off the same 1.3% as
+    // Reply Rate.
+    const fmt = (n: number) => n.toLocaleString();
+    const ratio = (num: number, den: number) => `${fmt(num)} / ${fmt(den)}`;
     const replyRatePct = campaignEmailsSent > 0 ? ((campaignReplies / campaignEmailsSent) * 100).toFixed(1) + '%' : '—';
-    const positiveReplyPct = campaignReplies > 0 ? ((campaignInterested / campaignReplies) * 100).toFixed(1) + '%' : '—';
-    // Lifetime Avg Conv. — matches the Funnel row's all-lifetime cadence.
-    // convertedTotal is the 26-week intros sum (functionally lifetime for
-    // this dashboard); campaignEmailsSent is the true lifetime email count.
+    const positiveReplyPct = campaignReplies > 0 ? ((interestedTotal / campaignReplies) * 100).toFixed(1) + '%' : '—';
     const lifetimeConvPer1k = campaignEmailsSent > 0 ? ((convertedTotal / campaignEmailsSent) * 1000).toFixed(1) + '%' : '—';
+    const replyRateRatio = ratio(campaignReplies, campaignEmailsSent);
+    const positiveReplyRatio = ratio(interestedTotal, campaignReplies);
+    const lifetimeConvRatio = ratio(convertedTotal, campaignEmailsSent);
+    const lifetimeIntToIntroRatio = ratio(convertedTotal, totalFunnel);
+
+    // This-Week Funnel — all inputs from weekly_metrics for the current week.
+    const weeklyReplyRatePct = weeklyEmails > 0 ? ((weeklyReplies / weeklyEmails) * 100).toFixed(1) + '%' : '—';
+    const weeklyPositiveReplyPct = weeklyReplies > 0 ? ((weeklyInterested / weeklyReplies) * 100).toFixed(1) + '%' : '—';
+    const weeklyConvPer1k = weeklyEmails > 0 ? ((weeklyIntros / weeklyEmails) * 1000).toFixed(1) + '%' : '—';
+    const weeklyConvRatePct = weeklyFunnel > 0 ? ((weeklyIntros / weeklyFunnel) * 100).toFixed(1) + '%' : '—';
+    const weeklyReplyRateRatio = ratio(weeklyReplies, weeklyEmails);
+    const weeklyPositiveReplyRatio = ratio(weeklyInterested, weeklyReplies);
+    const weeklyConvRatio = ratio(weeklyIntros, weeklyEmails);
+    const weeklyIntToIntroRatio = ratio(weeklyIntros, weeklyFunnel);
+
     return {
       total,
       risk,
@@ -534,18 +565,34 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       monthlyIntros,
       monthlyTarget,
       monthlyCompletionPct,
+      // Lifetime funnel
       replyRatePct,
       positiveReplyPct,
       lifetimeConvPer1k,
       campaignEmailsSent,
-      conv: convDen > 0 ? ((convNum / convDen) * 1000).toFixed(1) + '%' : '—',
-      // Raw avg (per-1k units, matches the displayed number) for row color logic.
-      convAvg: convDen > 0 ? (convNum / convDen) * 1000 : 0,
       convertedTotal,
       convRatePct:
         totalFunnel > 0
           ? ((convertedTotal / totalFunnel) * 100).toFixed(1) + '%'
           : '—',
+      replyRateRatio,
+      positiveReplyRatio,
+      lifetimeConvRatio,
+      lifetimeIntToIntroRatio,
+      // This-week funnel
+      weeklyEmails,
+      weeklyIntros,
+      weeklyReplyRatePct,
+      weeklyPositiveReplyPct,
+      weeklyConvPer1k,
+      weeklyConvRatePct,
+      weeklyReplyRateRatio,
+      weeklyPositiveReplyRatio,
+      weeklyConvRatio,
+      weeklyIntToIntroRatio,
+      conv: convDen > 0 ? ((convNum / convDen) * 1000).toFixed(1) + '%' : '—',
+      // Raw avg (per-1k units, matches the displayed number) for row color logic.
+      convAvg: convDen > 0 ? (convNum / convDen) * 1000 : 0,
     };
   }, [clients, key]);
 
@@ -844,14 +891,26 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
           </div>
 
           <div className="summary-group">
-            <div className="summary-group-label">Funnel</div>
+            <div className="summary-group-label">Funnel — Lifetime</div>
             <div className="summary-group-row">
-              <SummaryCard label="Emails Sent" cls="n-emails" num={summary.campaignEmailsSent.toLocaleString()} sub="lifetime, all campaigns" />
-              <SummaryCard label="Reply Rate" cls="n-conv" num={summary.replyRatePct} sub="lifetime, replies / emails" />
-              <SummaryCard label="Positive Reply" cls="n-conv" num={summary.positiveReplyPct} sub="lifetime, interested / replies" />
-              <SummaryCard label="Avg Conv." cls="n-conv" num={summary.lifetimeConvPer1k} sub="lifetime, 1k emails → intro" />
-              <SummaryCard label="Converted" cls="n-converted" num={summary.convertedTotal} sub="lifetime, interested → intro" />
-              <SummaryCard label="Int → Intro" cls="n-conv-rate" num={summary.convRatePct} sub="lifetime, of total funnel" />
+              <SummaryCard label="Emails Sent" cls="n-emails" num={summary.campaignEmailsSent.toLocaleString()} sub="all campaigns" />
+              <SummaryCard label="Reply Rate" cls="n-conv" num={summary.replyRatePct} sub={summary.replyRateRatio} />
+              <SummaryCard label="Positive Reply" cls="n-conv" num={summary.positiveReplyPct} sub={summary.positiveReplyRatio} />
+              <SummaryCard label="Avg Conv." cls="n-conv" num={summary.lifetimeConvPer1k} sub={summary.lifetimeConvRatio} />
+              <SummaryCard label="Converted" cls="n-converted" num={summary.convertedTotal} sub="interested → intro" />
+              <SummaryCard label="Int → Intro" cls="n-conv-rate" num={summary.convRatePct} sub={summary.lifetimeIntToIntroRatio} />
+            </div>
+          </div>
+
+          <div className="summary-group">
+            <div className="summary-group-label">Funnel — This Week</div>
+            <div className="summary-group-row">
+              <SummaryCard label="Emails Sent" cls="n-emails" num={summary.weeklyEmails.toLocaleString()} sub="all campaigns" />
+              <SummaryCard label="Reply Rate" cls="n-conv" num={summary.weeklyReplyRatePct} sub={summary.weeklyReplyRateRatio} />
+              <SummaryCard label="Positive Reply" cls="n-conv" num={summary.weeklyPositiveReplyPct} sub={summary.weeklyPositiveReplyRatio} />
+              <SummaryCard label="Avg Conv." cls="n-conv" num={summary.weeklyConvPer1k} sub={summary.weeklyConvRatio} />
+              <SummaryCard label="Converted" cls="n-converted" num={summary.weeklyIntros} sub="interested → intro" />
+              <SummaryCard label="Int → Intro" cls="n-conv-rate" num={summary.weeklyConvRatePct} sub={summary.weeklyIntToIntroRatio} />
             </div>
           </div>
         </div>

@@ -82,6 +82,7 @@ export interface WeeklyMetric {
   client_id: string;
   week_key: string; // YYYY-MM-DD (Monday)
   emails_sent: number;
+  replies: number;                      // Instantly daily 'replies' + Bison 'Replied' series, summed per week
   intros_corofy: number;                // Corofy "Introduction" count
   last_corofy_intro_at: string | null;
   interested_corofy: number;            // Corofy "Interested" count

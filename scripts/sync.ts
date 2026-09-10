@@ -14,7 +14,7 @@ import {
 } from '../lib/instantly';
 import {
   bisonCampaignSize,
-  bisonDailySent,
+  bisonDailyStats,
   bisonProgressPct,
   listBisonCampaigns,
   mapBisonStatus,
@@ -244,16 +244,19 @@ async function runInstantly(): Promise<SyncResult['instantly']> {
       (c.instantly_campaign_ids ?? []).forEach((id) => linkedIds.add(id));
     }
 
-    // campaignId -> weekKey -> sent
-    const campaignWeekly = new Map<string, Map<string, number>>();
+    // campaignId -> weekKey -> { sent, replies }
+    const campaignWeekly = new Map<string, Map<string, { sent: number; replies: number }>>();
     for (const cid of linkedIds) {
       try {
         const days = await dailyAnalytics(cid, rangeStart, rangeEnd);
-        const buckets = new Map<string, number>();
+        const buckets = new Map<string, { sent: number; replies: number }>();
         for (const d of days) {
           if (!d.date) continue;
           const wk = weekKey(d.date);
-          buckets.set(wk, (buckets.get(wk) ?? 0) + (d.sent ?? 0));
+          const cur = buckets.get(wk) ?? { sent: 0, replies: 0 };
+          cur.sent += d.sent ?? 0;
+          cur.replies += d.replies ?? 0;
+          buckets.set(wk, cur);
           // Capture today's-only count for the per-client "Today" rollup.
           if (d.date === todayET) {
             todayInstantlyByCampaign.set(
@@ -270,17 +273,19 @@ async function runInstantly(): Promise<SyncResult['instantly']> {
     }
 
     // For each client × each week, sum across linked Instantly campaigns and upsert.
-    // NOTE: emails_sent here is the Instantly subtotal. runBison() ADDs to this
-    // row in a second upsert (read-modify-write) so the final value is the
-    // combined cross-source total.
-    const upserts: { client_id: string; week_key: string; emails_sent: number }[] = [];
+    // NOTE: emails_sent + replies here are the Instantly subtotal. runBison()
+    // ADDs to these rows in a second upsert (read-modify-write) so the final
+    // value is the combined cross-source total.
+    const upserts: { client_id: string; week_key: string; emails_sent: number; replies: number }[] = [];
     for (const c of clients as { id: string; instantly_campaign_ids: string[] }[]) {
       for (const wk of mondayKeys) {
-        let total = 0;
+        let sent = 0;
+        let replies = 0;
         for (const cid of c.instantly_campaign_ids ?? []) {
-          total += campaignWeekly.get(cid)?.get(wk) ?? 0;
+          const b = campaignWeekly.get(cid)?.get(wk);
+          if (b) { sent += b.sent; replies += b.replies; }
         }
-        upserts.push({ client_id: c.id, week_key: wk, emails_sent: total });
+        upserts.push({ client_id: c.id, week_key: wk, emails_sent: sent, replies });
       }
     }
 
@@ -400,7 +405,7 @@ async function runBison(): Promise<SyncResult['bison']> {
     // endpoints reject UUIDs, so we use the int id when calling them.
     const intIdByUuid = new Map<string, number>(campaigns.map((c) => [c.uuid, c.id]));
 
-    const campaignWeekly = new Map<string, Map<string, number>>();
+    const campaignWeekly = new Map<string, Map<string, { sent: number; replies: number }>>();
     for (const cid of linkedIds) {
       const intId = intIdByUuid.get(cid);
       if (intId === undefined) {
@@ -408,12 +413,15 @@ async function runBison(): Promise<SyncResult['bison']> {
         continue;
       }
       try {
-        const days = await bisonDailySent(intId, rangeStart, rangeEnd);
-        const buckets = new Map<string, number>();
+        const days = await bisonDailyStats(intId, rangeStart, rangeEnd);
+        const buckets = new Map<string, { sent: number; replies: number }>();
         for (const d of days) {
           if (!d.date) continue;
           const wk = weekKey(d.date);
-          buckets.set(wk, (buckets.get(wk) ?? 0) + (d.sent ?? 0));
+          const cur = buckets.get(wk) ?? { sent: 0, replies: 0 };
+          cur.sent += d.sent ?? 0;
+          cur.replies += d.replied ?? 0;
+          buckets.set(wk, cur);
           if (d.date === todayET) {
             todayBisonByCampaign.set(
               cid,
@@ -423,34 +431,44 @@ async function runBison(): Promise<SyncResult['bison']> {
         }
         campaignWeekly.set(cid, buckets);
       } catch (err) {
-        console.warn(`bison daily-sent failed for ${cid} (int_id=${intId}):`, (err as Error).message);
+        console.warn(`bison daily-stats failed for ${cid} (int_id=${intId}):`, (err as Error).message);
         campaignWeekly.set(cid, new Map());
       }
     }
 
-    // Read existing weekly_metrics rows so we can ADD Bison sent on top of the
-    // Instantly subtotal that runInstantly already wrote. Avoids the two
+    // Read existing weekly_metrics rows so we can ADD Bison totals on top of
+    // the Instantly subtotal that runInstantly already wrote. Avoids the two
     // sources clobbering each other.
     const earliestKey = mondayKeys[0];
     const { data: existingMetrics } = await sb
       .from('weekly_metrics')
-      .select('client_id, week_key, emails_sent')
+      .select('client_id, week_key, emails_sent, replies')
       .gte('week_key', earliestKey);
-    const existingByKey = new Map<string, number>();
-    for (const m of (existingMetrics ?? []) as { client_id: string; week_key: string; emails_sent: number }[]) {
-      existingByKey.set(`${m.client_id}|${m.week_key}`, m.emails_sent ?? 0);
+    const existingByKey = new Map<string, { emails_sent: number; replies: number }>();
+    for (const m of (existingMetrics ?? []) as { client_id: string; week_key: string; emails_sent: number; replies: number }[]) {
+      existingByKey.set(`${m.client_id}|${m.week_key}`, {
+        emails_sent: m.emails_sent ?? 0,
+        replies: m.replies ?? 0,
+      });
     }
 
-    const upserts: { client_id: string; week_key: string; emails_sent: number }[] = [];
+    const upserts: { client_id: string; week_key: string; emails_sent: number; replies: number }[] = [];
     for (const c of clients as { id: string; bison_campaign_ids: string[] }[]) {
       for (const wk of mondayKeys) {
-        let bisonTotal = 0;
+        let bisonSent = 0;
+        let bisonReplies = 0;
         for (const cid of c.bison_campaign_ids ?? []) {
-          bisonTotal += campaignWeekly.get(cid)?.get(wk) ?? 0;
+          const b = campaignWeekly.get(cid)?.get(wk);
+          if (b) { bisonSent += b.sent; bisonReplies += b.replies; }
         }
-        if (bisonTotal === 0) continue; // nothing to add for this cell
-        const prev = existingByKey.get(`${c.id}|${wk}`) ?? 0;
-        upserts.push({ client_id: c.id, week_key: wk, emails_sent: prev + bisonTotal });
+        if (bisonSent === 0 && bisonReplies === 0) continue;
+        const prev = existingByKey.get(`${c.id}|${wk}`) ?? { emails_sent: 0, replies: 0 };
+        upserts.push({
+          client_id: c.id,
+          week_key: wk,
+          emails_sent: prev.emails_sent + bisonSent,
+          replies: prev.replies + bisonReplies,
+        });
       }
     }
 

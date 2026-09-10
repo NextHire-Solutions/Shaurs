@@ -12,6 +12,7 @@ export function generateSeed(): DashboardClient[] {
     client_id: clientId,
     week_key: key,
     emails_sent: emails,
+    replies: 0,
     intros_corofy: intros,
     last_corofy_intro_at: lastIntro ?? null,
     interested_corofy: 0,

@@ -2,6 +2,7 @@ import type { BillingInterval, DashboardClient, WeeklyMetric } from './types';
 
 const EMPTY_METRIC: Omit<WeeklyMetric, 'client_id' | 'week_key'> = {
   emails_sent: 0,
+  replies: 0,
   intros_corofy: 0,
   last_corofy_intro_at: null,
   interested_corofy: 0,
