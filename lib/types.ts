@@ -80,6 +80,11 @@ export interface Client {
   // tick; NOT clipped to the 26-week weekly_metrics backfill window.
   total_intros_corofy: number;
   total_interested_corofy: number;
+  // Migration 0017: ops-editable list of alternate strings that should ALSO
+  // match against campaign names during auto-linking. Fixes naming drift
+  // (e.g. a Bison campaign called "Spotlight + Triangle + …" for a client
+  // named "Spotlight - A Compass Team") without a code deploy.
+  campaign_aliases: string[];
 }
 
 export interface WeeklyMetric {

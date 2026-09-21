@@ -45,6 +45,7 @@ export async function POST(req: NextRequest) {
       billing_interval: body.billing_interval ?? 'biweekly',
       billing_interval_days: body.billing_interval_days ?? null,
       monthly_target: body.monthly_target ?? 0,
+      campaign_aliases: body.campaign_aliases ?? [],
     })
     .select()
     .single();
@@ -77,6 +78,7 @@ export async function PATCH(req: NextRequest) {
   if (body.billing_interval_days !== undefined) update.billing_interval_days = body.billing_interval_days;
   if (body.time_zone !== undefined) update.time_zone = body.time_zone;
   if (body.monthly_target !== undefined) update.monthly_target = body.monthly_target;
+  if (body.campaign_aliases !== undefined) update.campaign_aliases = body.campaign_aliases;
   const { data, error } = await sb
     .from('clients')
     .update(update)

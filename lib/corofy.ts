@@ -54,14 +54,55 @@ export async function listCorofyIntros(label?: 'Introduction' | 'Interested' | '
   if (!BASE) throw new Error('COROFY_BASE_URL is not set');
   const url = new URL(`${BASE}/api/clients/intros`);
   if (label) url.searchParams.set('label', label);
-  const res = await fetch(url.toString(), {
-    headers: { 'x-admin-token': token(), Accept: 'application/json' },
-    cache: 'no-store',
-  });
-  if (!res.ok) {
+  /*
+   * A LOGIN PAGE IS NOT DATA, AND IT ARRIVES AS A 200.
+   *
+   * Master Inbox lets this call through on an `x-admin-token` header. While
+   * that app is restarting — a deploy, or Railway moving the container — the
+   * check briefly does not recognise the token, so the request is treated as an
+   * unauthenticated browser visit and redirected to /login. `fetch` follows the
+   * redirect and hands back that page, successfully, as HTML.
+   *
+   * The old code went straight to `res.json()`, which threw
+   * `Unexpected token '<', "<!DOCTYPE "... is not valid JSON` and failed the
+   * whole Corofy sync. Three of fourteen runs on 17 September died this way.
+   *
+   * So: recognise the page for what it is and try again after a moment. A
+   * container restart is over in seconds, and the alternative — treating a
+   * transient restart as a failed sync — is what made intro counts lag.
+   */
+  const attempt = async (): Promise<{ ok: boolean; status: number; body: string; isHtml: boolean }> => {
+    const res = await fetch(url.toString(), {
+      headers: { 'x-admin-token': token(), Accept: 'application/json' },
+      cache: 'no-store',
+    });
     const body = await res.text().catch(() => '');
-    throw new Error(`Corofy /api/clients/intros${label ? `?label=${label}` : ''} ${res.status}: ${body.slice(0, 200)}`);
+    const type = res.headers.get('content-type') ?? '';
+    const isHtml = !type.includes('json') || body.trimStart().startsWith('<');
+    return { ok: res.ok, status: res.status, body, isHtml };
+  };
+
+  let r = await attempt();
+  if (r.ok && r.isHtml) {
+    console.warn('[corofy] got a web page instead of data — Master Inbox is probably restarting; retrying');
+    await new Promise((done) => setTimeout(done, 3000));
+    r = await attempt();
   }
-  const json = (await res.json()) as CorofyIntrosResp;
+
+  const what = `Corofy /api/clients/intros${label ? `?label=${label}` : ''}`;
+  if (!r.ok) throw new Error(`${what} ${r.status}: ${r.body.slice(0, 200)}`);
+  if (r.isHtml) {
+    throw new Error(
+      `${what} returned a web page rather than data, twice. Master Inbox may be down, ` +
+        `or COROFY_ADMIN_TOKEN no longer matches its service-role key.`,
+    );
+  }
+
+  let json: CorofyIntrosResp;
+  try {
+    json = JSON.parse(r.body) as CorofyIntrosResp;
+  } catch {
+    throw new Error(`${what} returned ${r.body.length} bytes that are not JSON: ${r.body.slice(0, 120)}`);
+  }
   return json.intros ?? [];
 }

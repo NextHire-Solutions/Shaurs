@@ -8,14 +8,6 @@ interface NamedCampaign {
   name: string;
 }
 
-// Manual overrides for clients whose Corofy name doesn't appear verbatim in
-// any Instantly campaign name. The value is a list of campaign-name prefixes
-// (normalized); any campaign whose normalized name starts with one of these
-// is linked to the client.
-export const MANUAL_LINKS: Record<string, string[]> = {
-  'Howe Realty Group': ['howe realty'],
-};
-
 export function normalizeForMatch(s: string): string {
   return s
     .toLowerCase()
@@ -28,26 +20,32 @@ export function normalizeForMatch(s: string): string {
 
 /**
  * Whole-name match: a campaign matches a client if its normalized name
- * CONTAINS the normalized client name as a substring. Plus any prefix
- * override registered in MANUAL_LINKS.
+ * CONTAINS the normalized client name as a substring — or contains ANY of
+ * the client's normalized aliases. Aliases are stored per-client on
+ * clients.campaign_aliases and edited via the client modal, so ops can fix
+ * naming drift without a code deploy.
  */
 export function autoMatchCampaigns<T extends NamedCampaign>(
   clientName: string,
-  campaigns: readonly T[]
+  campaigns: readonly T[],
+  aliases: readonly string[] = [],
 ): T[] {
   const cnorm = normalizeForMatch(clientName);
   if (!cnorm) return [];
-  const overrides = (MANUAL_LINKS[clientName] ?? []).map(normalizeForMatch);
+  const aliasNorms = aliases
+    .map(normalizeForMatch)
+    .filter((s) => s.length > 0);
   return campaigns.filter((c) => {
     const cn = normalizeForMatch(c.name);
     if (cn.includes(cnorm)) return true;
-    return overrides.some((prefix) => cn.startsWith(prefix));
+    return aliasNorms.some((a) => cn.includes(a));
   });
 }
 
 export function autoMatchCampaignIds(
   clientName: string,
-  campaigns: readonly NamedCampaign[]
+  campaigns: readonly NamedCampaign[],
+  aliases: readonly string[] = [],
 ): string[] {
-  return autoMatchCampaigns(clientName, campaigns).map((c) => c.id);
+  return autoMatchCampaigns(clientName, campaigns, aliases).map((c) => c.id);
 }

@@ -99,6 +99,9 @@ interface ModalState {
   billingIntervalDays: string;
   // IANA time-zone string from TIME_ZONES, or '' for none-selected.
   timeZone: string;
+  // Comma-separated aliases; parsed to string[] on save. Extra strings that
+  // should also match against campaign names during auto-linking.
+  campaignAliases: string;
 }
 
 const emptyModal: ModalState = {
@@ -113,6 +116,7 @@ const emptyModal: ModalState = {
   billingInterval: 'biweekly',
   billingIntervalDays: '',
   timeZone: '',
+  campaignAliases: '',
 };
 
 // User-local "today" as YYYY-MM-DD. new Date().toISOString() returns UTC,
@@ -635,6 +639,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       billingInterval: c.billing_interval ?? 'biweekly',
       billingIntervalDays: c.billing_interval_days != null ? String(c.billing_interval_days) : '',
       timeZone: c.time_zone ?? '',
+      campaignAliases: (c.campaign_aliases ?? []).join(', '),
     });
   }
 
@@ -645,11 +650,15 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
   async function saveClient() {
     const name = modal.name.trim();
     if (!name) return;
+    // Parse the comma-separated aliases field into a trimmed, non-empty list.
+    const aliases = modal.campaignAliases
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
     // Auto-link any Instantly OR Bison campaign whose name contains this
-    // client name (whole-name match + MANUAL_LINKS overrides). Same rule as
-    // the seed script + auto-relink step in the sync worker.
-    const linkedIds = autoMatchCampaignIds(name, allInstantlyCampaigns);
-    const linkedBisonIds = autoMatchCampaignIds(name, allBisonCampaigns);
+    // client name OR any alias. Same rule as the sync-worker's relink pass.
+    const linkedIds = autoMatchCampaignIds(name, allInstantlyCampaigns, aliases);
+    const linkedBisonIds = autoMatchCampaignIds(name, allBisonCampaigns, aliases);
     // Custom interval only — parse the typed days field into an int. Any
     // non-positive / non-numeric value falls back to null (server treats as
     // "no custom cadence set yet", and the billing-date helper returns null).
@@ -670,6 +679,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       billing_interval: modal.billingInterval,
       billing_interval_days: billingIntervalDays,
       time_zone: modal.timeZone || null,
+      campaign_aliases: aliases,
     };
     try {
       if (modal.editingId) {
@@ -713,6 +723,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             portal_url: null,
             total_intros_corofy: 0,
             total_interested_corofy: 0,
+            campaign_aliases: aliases,
             campaigns: [],
             bisonCampaigns: [],
             metricsByWeek: {},
@@ -1345,6 +1356,17 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               ))}
             </select>
             <div className="form-help">Shown as a short code (ET, PT, …) in the Client Success view.</div>
+          </div>
+
+          <div className="form-group">
+            <label>Campaign Name Aliases</label>
+            <input
+              type="text"
+              placeholder="e.g. Spotlight + Triangle, Compass NC"
+              value={modal.campaignAliases}
+              onChange={(e) => setModal((m) => ({ ...m, campaignAliases: e.target.value }))}
+            />
+            <div className="form-help">Comma-separated. Any Instantly or Bison campaign whose name contains one of these strings will auto-link to this client, in addition to campaigns matching the client name.</div>
           </div>
 
 

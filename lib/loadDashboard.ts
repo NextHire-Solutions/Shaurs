@@ -166,6 +166,7 @@ export async function loadDashboardClients(): Promise<{
       intros_since_last_billing: c.intros_since_last_billing ?? 0,
       total_intros_corofy: (c as { total_intros_corofy?: number }).total_intros_corofy ?? 0,
       total_interested_corofy: (c as { total_interested_corofy?: number }).total_interested_corofy ?? 0,
+      campaign_aliases: (c as { campaign_aliases?: string[] | null }).campaign_aliases ?? [],
       monthly_target: c.monthly_target ?? 0,
       intros_this_month: c.intros_this_month ?? 0,
       portal_url: c.portal_url ?? null,

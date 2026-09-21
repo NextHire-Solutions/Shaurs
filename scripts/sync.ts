@@ -149,6 +149,53 @@ function deriveStatusChangedAt(
   return undefined;
 }
 
+/*
+ * Read the stored per-source figures for the weeks being written — PAGED.
+ *
+ * PostgREST caps a response at 1,000 rows and says nothing about having done
+ * so. The 26-week window holds over 1,400, so an unpaginated read silently
+ * lost ~400 rows; a row missing from this map then looked like "no stored
+ * value" and its total was written as its own figure + 0. That is the dip to
+ * 30,051 on 17 September. Paging with a stable order fixes it; restricting to
+ * the weeks actually being rewritten keeps it small.
+ *
+ * NO transition guard here, on purpose. An earlier version treated "both
+ * source columns are 0 and the total is not" as "never populated" and used
+ * the total as the other source's stand-in. But a source's real figure can BE
+ * zero — Instantly's was, that same week — so after it wrote, the row still
+ * looked never-populated and the other job double-counted (72,719 for a true
+ * 42,668). The other column, as stored, is the only honest input.
+ */
+async function readStoredSources(
+  sb: SupabaseClientLike,
+  fromWeek: string,
+): Promise<Map<string, { emails_sent_instantly: number; replies_instantly: number; emails_sent_bison: number; replies_bison: number }>> {
+  const out = new Map<string, { emails_sent_instantly: number; replies_instantly: number; emails_sent_bison: number; replies_bison: number }>();
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await sb
+      .from('weekly_metrics')
+      .select('client_id, week_key, emails_sent_instantly, replies_instantly, emails_sent_bison, replies_bison')
+      .gte('week_key', fromWeek)
+      .order('week_key', { ascending: false })
+      .order('client_id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`weekly_metrics read: ${error.message}`);
+    const rows = (data ?? []) as { client_id: string; week_key: string; emails_sent_instantly: number | null; replies_instantly: number | null; emails_sent_bison: number | null; replies_bison: number | null }[];
+    for (const r of rows) {
+      out.set(`${r.client_id}|${r.week_key}`, {
+        emails_sent_instantly: r.emails_sent_instantly ?? 0,
+        replies_instantly: r.replies_instantly ?? 0,
+        emails_sent_bison: r.emails_sent_bison ?? 0,
+        replies_bison: r.replies_bison ?? 0,
+      });
+    }
+    if (rows.length < PAGE) break;
+  }
+  return out;
+}
+type SupabaseClientLike = ReturnType<typeof getSupabase>;
+
 async function runInstantly(): Promise<SyncResult['instantly']> {
   const sb = getSupabase();
   const { data: run } = await sb
@@ -216,10 +263,10 @@ async function runInstantly(): Promise<SyncResult['instantly']> {
     const namedCampaigns = campaigns.map((c) => ({ id: c.id, name: c.name }));
     const { data: clientsForRelink } = await sb
       .from('clients')
-      .select('id, name, instantly_campaign_ids');
+      .select('id, name, instantly_campaign_ids, campaign_aliases');
     if (clientsForRelink) {
-      for (const c of clientsForRelink as { id: string; name: string; instantly_campaign_ids: string[] }[]) {
-        const expected = autoMatchCampaignIds(c.name, namedCampaigns).sort();
+      for (const c of clientsForRelink as { id: string; name: string; instantly_campaign_ids: string[]; campaign_aliases: string[] | null }[]) {
+        const expected = autoMatchCampaignIds(c.name, namedCampaigns, c.campaign_aliases ?? []).sort();
         const current = [...(c.instantly_campaign_ids ?? [])].sort();
         const same = expected.length === current.length && expected.every((id, i) => id === current[i]);
         if (!same) {
@@ -246,6 +293,8 @@ async function runInstantly(): Promise<SyncResult['instantly']> {
 
     // campaignId -> weekKey -> { sent, replies }
     const campaignWeekly = new Map<string, Map<string, { sent: number; replies: number }>>();
+    /** Campaigns whose daily analytics could not be read on this run. */
+    const unreadable = new Set<string>();
     for (const cid of linkedIds) {
       try {
         const days = await dailyAnalytics(cid, rangeStart, rangeEnd);
@@ -267,26 +316,80 @@ async function runInstantly(): Promise<SyncResult['instantly']> {
         }
         campaignWeekly.set(cid, buckets);
       } catch (err) {
+        /*
+         * A FAILED FETCH IS NOT ZERO SENDS.
+         *
+         * This used to store an empty bucket map, which then wrote 0 over the
+         * client's real weekly figure. One flaky call to Instantly and the
+         * dashboard showed a week's sending as near-nothing until the next run
+         * happened to succeed. That is most of what people saw as "the number
+         * is off, it comes right if I refresh".
+         *
+         * Record the campaign as UNREADABLE instead. The client it belongs to
+         * is skipped below, keeping whatever was last known to be true.
+         */
         console.warn(`daily-analytics failed for ${cid}:`, (err as Error).message);
-        campaignWeekly.set(cid, new Map());
+        unreadable.add(cid);
       }
     }
 
-    // For each client × each week, sum across linked Instantly campaigns and upsert.
-    // NOTE: emails_sent + replies here are the Instantly subtotal. runBison()
-    // ADDs to these rows in a second upsert (read-modify-write) so the final
-    // value is the combined cross-source total.
-    const upserts: { client_id: string; week_key: string; emails_sent: number; replies: number }[] = [];
+    /*
+     * EACH SOURCE OWNS ITS OWN COLUMN, AND THE TOTAL IS DERIVED.
+     *
+     * This job used to write `emails_sent` as the Instantly subtotal, and the
+     * Bison job then read that back and wrote subtotal + its own. Three things
+     * went wrong with that:
+     *
+     *   · two Instantly runs in a row threw Bison's contribution away;
+     *   · two Bison runs in a row counted Bison twice;
+     *   · between the two jobs the stored total was Instantly-only, so anyone
+     *     loading the dashboard mid-cycle saw a number that was simply wrong —
+     *     it passed through 0 on every sync.
+     *
+     * Now this job writes ONLY `emails_sent_instantly` / `replies_instantly`,
+     * which nothing else writes, and sets `emails_sent` to its own figure plus
+     * the Bison columns AS STORED. Bison does the mirror image. Neither can
+     * clobber the other, order stops mattering, and the total is correct after
+     * every single write rather than only at the end of a clean pair.
+     */
+    const stored = await readStoredSources(sb, mondayKeys[0]);
+    const bisonStored = new Map<string, { emails: number; replies: number }>();
+    for (const [k, v] of stored) bisonStored.set(k, { emails: v.emails_sent_bison, replies: v.replies_bison });
+
+    const upserts: {
+      client_id: string; week_key: string;
+      emails_sent: number; replies: number;
+      emails_sent_instantly: number; replies_instantly: number;
+    }[] = [];
+    let skippedClients = 0;
     for (const c of clients as { id: string; instantly_campaign_ids: string[] }[]) {
+      const ids = c.instantly_campaign_ids ?? [];
+      /*
+       * If ANY of this client's campaigns could not be read, we do not know
+       * their Instantly figure this run. Writing a partial sum would look like
+       * a drop in sending. Leave the row alone; the next run fixes it.
+       */
+      if (ids.some((id) => unreadable.has(id))) { skippedClients++; continue; }
       for (const wk of mondayKeys) {
         let sent = 0;
         let replies = 0;
-        for (const cid of c.instantly_campaign_ids ?? []) {
+        for (const cid of ids) {
           const b = campaignWeekly.get(cid)?.get(wk);
           if (b) { sent += b.sent; replies += b.replies; }
         }
-        upserts.push({ client_id: c.id, week_key: wk, emails_sent: sent, replies });
+        const bison = bisonStored.get(`${c.id}|${wk}`) ?? { emails: 0, replies: 0 };
+        upserts.push({
+          client_id: c.id,
+          week_key: wk,
+          emails_sent_instantly: sent,
+          replies_instantly: replies,
+          emails_sent: sent + bison.emails,
+          replies: replies + bison.replies,
+        });
       }
+    }
+    if (skippedClients > 0) {
+      console.warn(`[sync:instantly] left ${skippedClients} client(s) untouched — analytics unreadable this run`);
     }
 
     if (upserts.length > 0) {
@@ -370,14 +473,15 @@ async function runBison(): Promise<SyncResult['bison']> {
       if (error) throw new Error(error.message);
     }
 
-    // Auto-relink Bison campaigns to clients using the same whole-name match.
+    // Auto-relink Bison campaigns to clients using the same whole-name match,
+    // extended with each client's campaign_aliases.
     const namedCampaigns = campaigns.map((c) => ({ id: c.uuid, name: c.name }));
     const { data: clientsForRelink } = await sb
       .from('clients')
-      .select('id, name, bison_campaign_ids');
+      .select('id, name, bison_campaign_ids, campaign_aliases');
     if (clientsForRelink) {
-      for (const c of clientsForRelink as { id: string; name: string; bison_campaign_ids: string[] }[]) {
-        const expected = autoMatchCampaignIds(c.name, namedCampaigns).sort();
+      for (const c of clientsForRelink as { id: string; name: string; bison_campaign_ids: string[]; campaign_aliases: string[] | null }[]) {
+        const expected = autoMatchCampaignIds(c.name, namedCampaigns, c.campaign_aliases ?? []).sort();
         const current = [...(c.bison_campaign_ids ?? [])].sort();
         const same = expected.length === current.length && expected.every((id, i) => id === current[i]);
         if (!same) {
@@ -406,6 +510,8 @@ async function runBison(): Promise<SyncResult['bison']> {
     const intIdByUuid = new Map<string, number>(campaigns.map((c) => [c.uuid, c.id]));
 
     const campaignWeekly = new Map<string, Map<string, { sent: number; replies: number }>>();
+    /** Campaigns whose daily stats could not be read on this run. */
+    const unreadable = new Set<string>();
     for (const cid of linkedIds) {
       const intId = intIdByUuid.get(cid);
       if (intId === undefined) {
@@ -431,45 +537,61 @@ async function runBison(): Promise<SyncResult['bison']> {
         }
         campaignWeekly.set(cid, buckets);
       } catch (err) {
+        // A failed fetch is not zero sends — see the matching note in the
+        // Instantly job. The client is skipped below rather than zeroed.
         console.warn(`bison daily-stats failed for ${cid} (int_id=${intId}):`, (err as Error).message);
-        campaignWeekly.set(cid, new Map());
+        unreadable.add(cid);
       }
     }
 
-    // Read existing weekly_metrics rows so we can ADD Bison totals on top of
-    // the Instantly subtotal that runInstantly already wrote. Avoids the two
-    // sources clobbering each other.
+    /*
+     * The mirror image of the Instantly job: this one owns `emails_sent_bison`
+     * and `replies_bison`, reads the INSTANTLY columns as stored, and writes
+     * the total from the two. It no longer reads `emails_sent` — reading a
+     * value this job also writes is what made a second run in a row count
+     * Bison twice.
+     */
     const earliestKey = mondayKeys[0];
-    const { data: existingMetrics } = await sb
-      .from('weekly_metrics')
-      .select('client_id, week_key, emails_sent, replies')
-      .gte('week_key', earliestKey);
-    const existingByKey = new Map<string, { emails_sent: number; replies: number }>();
-    for (const m of (existingMetrics ?? []) as { client_id: string; week_key: string; emails_sent: number; replies: number }[]) {
-      existingByKey.set(`${m.client_id}|${m.week_key}`, {
-        emails_sent: m.emails_sent ?? 0,
-        replies: m.replies ?? 0,
-      });
-    }
+    const stored = await readStoredSources(sb, earliestKey);
+    const instantlyStored = new Map<string, { emails: number; replies: number }>();
+    for (const [k, v] of stored) instantlyStored.set(k, { emails: v.emails_sent_instantly, replies: v.replies_instantly });
 
-    const upserts: { client_id: string; week_key: string; emails_sent: number; replies: number }[] = [];
+    const upserts: {
+      client_id: string; week_key: string;
+      emails_sent: number; replies: number;
+      emails_sent_bison: number; replies_bison: number;
+    }[] = [];
+    let skippedClients = 0;
     for (const c of clients as { id: string; bison_campaign_ids: string[] }[]) {
+      const ids = c.bison_campaign_ids ?? [];
+      if (ids.length === 0) continue;
+      if (ids.some((id) => unreadable.has(id))) { skippedClients++; continue; }
       for (const wk of mondayKeys) {
         let bisonSent = 0;
         let bisonReplies = 0;
-        for (const cid of c.bison_campaign_ids ?? []) {
+        for (const cid of ids) {
           const b = campaignWeekly.get(cid)?.get(wk);
           if (b) { bisonSent += b.sent; bisonReplies += b.replies; }
         }
-        if (bisonSent === 0 && bisonReplies === 0) continue;
-        const prev = existingByKey.get(`${c.id}|${wk}`) ?? { emails_sent: 0, replies: 0 };
+        /*
+         * No early `continue` on a zero week any more. Skipping zero weeks
+         * meant a campaign that stopped sending kept its last non-zero Bison
+         * figure for ever, because nothing ever wrote the zero that replaced
+         * it. Now the row is written either way and the total stays honest.
+         */
+        const inst = instantlyStored.get(`${c.id}|${wk}`) ?? { emails: 0, replies: 0 };
         upserts.push({
           client_id: c.id,
           week_key: wk,
-          emails_sent: prev.emails_sent + bisonSent,
-          replies: prev.replies + bisonReplies,
+          emails_sent_bison: bisonSent,
+          replies_bison: bisonReplies,
+          emails_sent: inst.emails + bisonSent,
+          replies: inst.replies + bisonReplies,
         });
       }
+    }
+    if (skippedClients > 0) {
+      console.warn(`[sync:bison] left ${skippedClients} client(s) untouched — daily stats unreadable this run`);
     }
 
     if (upserts.length > 0) {
