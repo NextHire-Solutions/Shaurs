@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
 import { autoMatchCampaignIds } from '@/lib/matchCampaigns';
+import { pushPortalStatus } from '@/lib/portal-status-push';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -118,6 +119,10 @@ export async function POST(req: NextRequest) {
     .single();
 
   if (insert.error) return bad(insert.error.message, 500);
+
+  // The roster changed, so MasterInbox's portal reconcile has new input.
+  // Fire-and-forget; it can never fail this onboarding call.
+  pushPortalStatus(`onboarded: ${name}`);
 
   return NextResponse.json(
     {

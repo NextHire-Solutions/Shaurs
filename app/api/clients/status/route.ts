@@ -11,15 +11,15 @@
 //   paused  = client_paused=true AND !hidden   (dashboard "Client Paused" view)
 //   active  = !hidden AND !client_paused       (everyone else — default view)
 // hidden wins if both flags are set, matching how the dashboard prioritizes
-// the Hidden filter (line 169 of app/Dashboard.tsx).
+// the Hidden filter (line 169 of app/Dashboard.tsx). Implemented once, in
+// lib/portal-status-push.ts, and imported here.
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
+import { effectiveStatus, type ClientStatus } from '@/lib/portal-status-push';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-type ClientStatus = 'active' | 'paused' | 'churned';
 
 export async function GET(req: NextRequest) {
   const secret = process.env.READ_ONLY_TOKEN;
@@ -35,13 +35,13 @@ export async function GET(req: NextRequest) {
     .order('name');
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const clients = (data ?? []).map((c) => {
-    let status: ClientStatus;
-    if (c.hidden) status = 'churned';
-    else if (c.client_paused) status = 'paused';
-    else status = 'active';
-    return { id: c.id, name: c.name, status };
-  });
+  // The derivation lives in lib/portal-status-push so this feed and the push
+  // that announces a change can never drift apart.
+  const clients = (data ?? []).map((c) => ({
+    id: c.id,
+    name: c.name,
+    status: effectiveStatus(c),
+  }));
 
   const counts = clients.reduce(
     (acc, c) => ({ ...acc, [c.status]: acc[c.status] + 1 }),

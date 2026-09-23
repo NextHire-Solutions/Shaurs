@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabase } from '@/lib/supabase';
 import { requireRead, requireWrite } from '@/lib/route-auth';
+import { effectiveStatus, pushPortalStatus } from '@/lib/portal-status-push';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -14,6 +15,17 @@ export const dynamic = 'force-dynamic';
 //
 // Reads now accept READ_ONLY_TOKEN. Writes never do: a token handed to
 // "lower-trust consumers" (its own words) must not be able to delete a client.
+//
+// PORTAL PUSH. This dashboard decides whether a client is active, paused or
+// churned; MasterInbox switches that client's portal on or off to match. It
+// polls on a schedule, so without a nudge a churned client's portal can stay
+// open until the next run. Each write below therefore calls pushPortalStatus()
+// AFTER it has succeeded — fire-and-forget, never able to fail the save.
+// See lib/portal-status-push.ts.
+//
+// DELETE deliberately does NOT push. MasterInbox never touches a client that
+// is absent from this feed — that rule is what stops an empty feed closing
+// every portal at once — so a deleted client has nothing to reconcile.
 
 export async function GET(req: NextRequest) {
   const denied = await requireRead(req);
@@ -50,6 +62,11 @@ export async function POST(req: NextRequest) {
     .select()
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  // A new client is active, and MasterInbox may already hold a portal under
+  // this name with the switch off. Let it reconcile now rather than wait.
+  pushPortalStatus(`client created: ${data?.name ?? body.name}`);
+
   return NextResponse.json({ client: data }, { status: 201 });
 }
 
@@ -60,6 +77,26 @@ export async function PATCH(req: NextRequest) {
   const body = await req.json();
   if (!body.id) return NextResponse.json({ error: 'id required' }, { status: 400 });
   const sb = getSupabase();
+
+  // Read the row first, but only when this PATCH could actually move a portal.
+  // MasterInbox matches clients BY NAME, so a rename changes which portal a
+  // status applies to and counts as portal-affecting just as much as the two
+  // flags do. Every other field (targets, billing, campaign ids) cannot, and
+  // skips the extra round trip.
+  const mayAffectPortal =
+    body.hidden !== undefined ||
+    body.client_paused !== undefined ||
+    typeof body.name === 'string';
+  const before = mayAffectPortal
+    ? (
+        await sb
+          .from('clients')
+          .select('name, hidden, client_paused')
+          .eq('id', body.id)
+          .maybeSingle()
+      ).data
+    : null;
+
   const update: Record<string, unknown> = {
     name: body.name,
     plan: body.plan,
@@ -86,6 +123,20 @@ export async function PATCH(req: NextRequest) {
     .select()
     .single();
   if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+
+  // Compare what the database actually stored, not what the caller asked for:
+  // a no-op toggle (hiding an already-hidden client) must not fire a push, and
+  // a field the update silently dropped must not look like a change.
+  if (before && data) {
+    const wasStatus = effectiveStatus(before);
+    const nowStatus = effectiveStatus(data);
+    if (wasStatus !== nowStatus) {
+      pushPortalStatus(`${data.name}: ${wasStatus} -> ${nowStatus}`);
+    } else if (before.name !== data.name) {
+      pushPortalStatus(`renamed: ${before.name} -> ${data.name}`);
+    }
+  }
+
   return NextResponse.json({ client: data });
 }
 
