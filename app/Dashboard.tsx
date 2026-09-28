@@ -2646,17 +2646,19 @@ function ClientRow({
       <td className="client-cell">
         <div className="client-name">
           {client.name}
-          {client.portal_url && (
-            <a
-              className="portal-link"
-              href={client.portal_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="Open client portal in Corofy"
-              onClick={(e) => e.stopPropagation()}
-            >↗</a>
-          )}
-          {campToggle}
+          <span className="client-name-icons">
+            {client.portal_url && (
+              <a
+                className="portal-link"
+                href={client.portal_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="Open client portal in Corofy"
+                onClick={(e) => e.stopPropagation()}
+              >↗</a>
+            )}
+            {campToggle}
+          </span>
           {client.hidden && <span className="hidden-badge">Churned</span>}
           {!client.hidden && client.client_paused && (
             <span className="client-paused-badge">Client Paused</span>

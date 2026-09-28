@@ -227,13 +227,17 @@ export function isCurrentWeek(key: string): boolean {
   return key === weekKey(new Date());
 }
 
-export function daysSinceLastIntro(lastIntroAt: string | null | undefined): number | null {
+// Whole calendar days since the last intro, counted on US Eastern dates — the
+// same business clock as "Daily Emails Sent". Using the machine's local
+// timezone made the server (UTC) and the viewer's browser disagree near
+// midnight, which forced React to re-render the whole table on load.
+export function daysSinceLastIntro(lastIntroAt: string | null | undefined, now = new Date()): number | null {
   if (!lastIntroAt) return null;
   const last = new Date(lastIntroAt);
-  last.setHours(0, 0, 0, 0);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return Math.floor((today.getTime() - last.getTime()) / 86400000);
+  if (!Number.isFinite(last.getTime())) return null;
+  const lastET = Date.parse(todayInET(last) + 'T00:00:00Z');
+  const todayET = Date.parse(todayInET(now) + 'T00:00:00Z');
+  return Math.max(0, Math.round((todayET - lastET) / 86400000));
 }
 
 export interface DerivedRow {
