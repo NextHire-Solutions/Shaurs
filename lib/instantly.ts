@@ -137,3 +137,33 @@ export function progressPct(a: InstantlyAnalyticsItem): number {
 export function campaignSize(a: InstantlyAnalyticsItem): number {
   return a.leads_count ?? 0;
 }
+
+// --- Campaign Play/Pause (used by lib/campaign-toggle.ts) -----------------
+
+async function send<T>(path: string, method: 'POST' | 'PATCH'): Promise<T> {
+  const res = await fetch(BASE + path, {
+    method,
+    headers: { Authorization: `Bearer ${key()}`, 'Content-Type': 'application/json' },
+    body: '{}',
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Instantly ${path} ${res.status}: ${body.slice(0, 200)}`);
+  }
+  return (await res.json().catch(() => ({}))) as T;
+}
+
+/** Live status straight from Instantly: 0 draft, 1 active, 2 paused, 3 completed. */
+export async function getCampaignStatus(id: string): Promise<number | null> {
+  const c = await get<{ status?: number }>(`/api/v2/campaigns/${encodeURIComponent(id)}`);
+  return typeof c?.status === 'number' ? c.status : null;
+}
+
+export function pauseCampaign(id: string): Promise<unknown> {
+  return send(`/api/v2/campaigns/${encodeURIComponent(id)}/pause`, 'POST');
+}
+
+export function activateCampaign(id: string): Promise<unknown> {
+  return send(`/api/v2/campaigns/${encodeURIComponent(id)}/activate`, 'POST');
+}

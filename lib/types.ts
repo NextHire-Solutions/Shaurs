@@ -1,3 +1,5 @@
+import type { Market } from './markets';
+
 export type Plan = 'minimum' | 'production' | 'partner';
 
 export type CampaignStatus = 'running' | 'paused' | 'finished';
@@ -85,6 +87,20 @@ export interface Client {
   // (e.g. a Bison campaign called "Spotlight + Triangle + …" for a client
   // named "Spotlight - A Compass Team") without a code deploy.
   campaign_aliases: string[];
+  // Migration 0020: assigned_at of every Corofy Introduction for this client,
+  // rewritten by the sync each tick. Drives the billing-cycle math in
+  // lib/billing.ts (intros due / delivered / carried forward, 28-day period).
+  intro_dates: string[];
+  // Campaigns the Play/Pause toggle paused — Play resumes exactly these.
+  toggle_paused_campaigns: ToggledCampaign[];
+}
+
+export interface ToggledCampaign {
+  platform: 'instantly' | 'bison';
+  id: string;          // Instantly uuid, or Bison uuid (our key)
+  int_id?: number | null; // Bison's integer id — its API only accepts this
+  name: string;
+  paused_at: string;
 }
 
 export interface WeeklyMetric {
@@ -109,6 +125,10 @@ export interface DashboardClient extends Client {
   // Derived runtime field (not a DB column): true when the client appears
   // in Corofy's /api/clients/portals response with portal_enabled=true.
   portalActive: boolean;
+  // Markets from the BrokerStaffer OS (os_client_markets). Null when the OS
+  // database isn't configured or couldn't be reached — distinct from [] (no
+  // markets entered yet).
+  markets: Market[] | null;
 }
 
 export const HISTORICAL_WEEKS = 26;

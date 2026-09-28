@@ -783,6 +783,22 @@ async function runCorofy(): Promise<SyncResult['corofy']> {
             console.warn(`[corofy] client-field update failed for ${c.name}: ${error.message}`);
           }
         }
+        // Raw intro dates for the dashboard's billing-cycle math (lib/billing.ts).
+        // Separate write so a failure here cannot block the fields above.
+        const introDates = clientIntros
+          .map((r) => r.assigned_at)
+          .filter((a) => Number.isFinite(new Date(a).getTime()))
+          .sort();
+        const { error: datesErr } = await sb
+          .from('clients')
+          .update({ intro_dates: introDates })
+          .eq('id', c.id);
+        if (datesErr) {
+          cfWriteErrors++;
+          if (cfWriteErrors <= 3) {
+            console.warn(`[corofy] intro_dates update failed for ${c.name}: ${datesErr.message}`);
+          }
+        }
       }
       if (cfWriteErrors > 3) {
         console.warn(`[corofy] ...${cfWriteErrors - 3} more client-field update errors suppressed`);

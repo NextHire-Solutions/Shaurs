@@ -48,6 +48,9 @@ export function generateSeed(): DashboardClient[] {
     | 'total_intros_corofy'
     | 'total_interested_corofy'
     | 'campaign_aliases'
+    | 'intro_dates'
+    | 'toggle_paused_campaigns'
+    | 'markets'
     | 'campaigns'
     | 'bisonCampaigns'
   > & {
@@ -202,6 +205,9 @@ export function generateSeed(): DashboardClient[] {
     total_intros_corofy: 0,
     total_interested_corofy: 0,
     campaign_aliases: [],
+    intro_dates: [],
+    toggle_paused_campaigns: [],
+    markets: null,
     // Fill reply_count + interested_count on every nested campaign so they
     // satisfy the InstantlyCampaign / BisonCampaign types without bloating
     // each literal above.

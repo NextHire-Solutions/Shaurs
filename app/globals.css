@@ -644,3 +644,62 @@ tr.is-client-paused:hover { background: #F1F5F9; }
 .bw-done  { color: var(--green);  font-weight: 700; }
 .bw-mid   { color: var(--yellow); font-weight: 700; }
 .bw-short { color: var(--red);    font-weight: 700; }
+
+/* ---- Markets covered (from the BrokerStaffer OS) ---- */
+.client-markets { font-size: 11px; color: var(--blue); font-weight: 600; margin-top: 2px; cursor: default; }
+.client-markets.is-empty { color: var(--text-muted); font-weight: 500; }
+
+/* ---- Campaign Play/Pause toggle, next to the portal arrow ---- */
+.camp-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-left: 4px; width: 20px; height: 18px; padding: 0;
+  border: 1px solid var(--border); border-radius: 5px; background: var(--white);
+  color: var(--text-muted); font-size: 9px; line-height: 1; cursor: pointer; vertical-align: 1px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.camp-toggle:hover:not(:disabled) { color: var(--text); border-color: var(--text-muted); }
+.camp-toggle:disabled { opacity: 0.35; cursor: not-allowed; }
+.camp-toggle.is-paused { background: var(--yellow-bg); border-color: var(--yellow-border); color: var(--yellow); }
+.camp-toggle.is-paused:hover { background: var(--green-bg); border-color: var(--green-border); color: var(--green); }
+
+/* ---- Intros / Billing + Monthly cells ---- */
+.ib-cell { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.ib-due { font-size: 11px; color: var(--text-muted); }
+
+/* ---- Overdue / carry-forward indicator ---- */
+.carry-badge {
+  display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px;
+  background: var(--red-bg); border: 1px solid var(--red-border); color: var(--red);
+  font-size: 10.5px; font-weight: 700; white-space: nowrap; cursor: help; outline: none;
+}
+.carry-badge:focus-visible { box-shadow: 0 0 0 2px var(--red-border); }
+.carry-badge.carry-cleared { background: var(--bg); border-color: var(--border); color: var(--text-muted); }
+.carry-pop {
+  position: fixed; z-index: 60; width: 240px; display: flex; flex-direction: column; gap: 4px;
+  background: var(--white); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.14); color: var(--text); font-size: 12px; font-weight: 500; cursor: default;
+}
+.carry-pop-title { font-size: 11px; font-weight: 700; color: var(--red); text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 2px; }
+.carry-cleared .carry-pop-title { color: var(--text-muted); }
+.carry-pop-row { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
+.carry-pop-over { color: var(--red); }
+.carry-pop-total { border-top: 1px solid var(--border); padding-top: 4px; margin-top: 2px; font-weight: 700; }
+tr.has-carry td:first-child { box-shadow: inset 3px 0 0 var(--red); }
+
+/* ---- Campaign Play/Pause dialog ---- */
+.toggle-modal { max-width: 520px; }
+.toggle-modal p { font-size: 13px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.45; }
+.toggle-warn { color: var(--yellow) !important; font-weight: 600; }
+.toggle-error { color: var(--red) !important; font-weight: 600; }
+.toggle-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; max-height: 40vh; overflow-y: auto; }
+.toggle-list li { display: flex; align-items: baseline; gap: 8px; }
+.toggle-list em { color: var(--text-muted); font-style: normal; font-size: 12px; }
+.toggle-ok { color: var(--green); }
+.toggle-fail { color: var(--red); }
+.toggle-skipped { margin-top: 12px; font-size: 12px; color: var(--text-muted); }
+.toggle-skipped summary { cursor: pointer; font-weight: 600; }
+.src-chip { flex: none; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 5px; background: var(--blue-pale); color: var(--blue); }
+.src-chip.src-bison { background: var(--purple-bg); color: var(--purple); }
+.btn-danger { flex: 1; background: var(--red); color: white; border: none; border-radius: 10px; padding: 11px; font-size: 14px; font-weight: 700; cursor: pointer; }
+.btn-danger:hover:not(:disabled) { background: #B91C1C; }
+.btn-danger:disabled, .btn-primary:disabled, .btn-secondary:disabled { opacity: 0.5; cursor: not-allowed; }

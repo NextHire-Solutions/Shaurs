@@ -4,22 +4,25 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   addDays,
-  biweeklyIntros,
   clientScore,
   daysUntil,
   derive,
   formatWeek,
   getMondayOf,
   isCurrentWeek,
-  lastBillingDate,
-  nextBillingDate,
   todayInET,
   weekKey,
 } from '@/lib/derive';
+import {
+  billingDueInWeek,
+  billingSnapshot,
+  type BillingSnapshot,
+  type CycleState,
+} from '@/lib/billing';
+import { describeMarket } from '@/lib/markets';
 import { autoMatchCampaignIds } from '@/lib/matchCampaigns';
 import {
   BILLING_INTERVAL_LABEL,
-  BIWEEKLY_TARGET,
   PLAN_BADGE_CLASS,
   PLAN_DEFAULT_TARGET,
   PLAN_LABEL,
@@ -39,7 +42,7 @@ type PlanFilter = 'all' | 'minimum' | 'production' | 'partner';
 type TzFilter = 'all' | string; // 'all' or an IANA value from TIME_ZONES
 type BillingWindowFilter = 'all' | '7' | '14' | '30'; // any / within 7d / 14d / 30d
 
-type SortCol = 'campaigns' | 'leftWeek' | 'lastIntro' | 'emails' | 'today' | 'progress' | 'intros' | 'interested' | 'conv' | 'converted' | 'convRate' | 'tz' | 'monthly' | 'billing' | 'billingDays' | 'lastBilling';
+type SortCol = 'campaigns' | 'introsBilling' | 'weekEmails' | 'lastIntro' | 'emails' | 'today' | 'progress' | 'intros' | 'interested' | 'conv' | 'converted' | 'convRate' | 'tz' | 'monthly' | 'billing' | 'billingDays' | 'lastBilling';
 type SortBy = null | { col: SortCol; dir: 'desc' | 'asc' };
 
 // Funnel-based conversion helpers. Both Corofy labels are mutually exclusive
@@ -61,6 +64,33 @@ function convRateFor(c: DashboardClient): number | null {
 }
 
 type DatePreset = 'last7' | 'last30' | 'ytd' | 'custom' | null;
+
+// Mirrors lib/campaign-toggle.ts (server-only module) for the dialog.
+interface ToggleCampaignView {
+  platform: 'instantly' | 'bison';
+  id: string;
+  name: string;
+  status: string;
+}
+interface TogglePlanView {
+  clientName: string;
+  action: 'pause' | 'resume';
+  willChange: ToggleCampaignView[];
+  skipped: { campaign: ToggleCampaignView; reason: string }[];
+}
+interface ToggleOutcomeView {
+  campaign: ToggleCampaignView;
+  ok: boolean;
+  error?: string;
+}
+type ToggleDialogState = null | {
+  client: DashboardClient;
+  action: 'pause' | 'resume';
+  phase: 'loading' | 'confirm' | 'applying' | 'done' | 'error';
+  plan: TogglePlanView | null;
+  outcomes: ToggleOutcomeView[] | null;
+  error: string | null;
+};
 
 interface Props {
   initialClients: DashboardClient[];
@@ -90,7 +120,6 @@ interface ModalState {
   name: string;
   plan: Plan;
   startDate: string;
-  weeklyTarget: number;
   monthlyTarget: number;
   billingAnchorDate: string;
   billingInterval: BillingInterval;
@@ -110,7 +139,6 @@ const emptyModal: ModalState = {
   name: '',
   plan: 'production',
   startDate: '',
-  weeklyTarget: PLAN_DEFAULT_TARGET.production,
   monthlyTarget: 0,
   billingAnchorDate: '',
   billingInterval: 'biweekly',
@@ -168,6 +196,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
   const [toast, setToast] = useState<string | null>(null);
   const [modal, setModal] = useState<ModalState>(emptyModal);
   const [refreshing, setRefreshing] = useState(false);
+  const [toggleDialog, setToggleDialog] = useState<ToggleDialogState>(null);
 
   // When the server re-fetches the dashboard (e.g. after router.refresh()),
   // re-prime the local clients state from the new server props. Without this,
@@ -190,6 +219,20 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
 
   const key = weekKey(currentMonday);
   const isCurrent = isCurrentWeek(key);
+  // Billing math is measured "as of" now for the current week, and as of the
+  // Sunday that closes a past week when browsing history.
+  const asOf = useMemo(
+    () => (isCurrent ? new Date() : new Date(addDays(currentMonday, 6).getTime() + 12 * 3_600_000)),
+    [isCurrent, currentMonday],
+  );
+  // One billing snapshot per client (cycle, 28-day period, status) — every
+  // column, card, filter and sort below reads from this map.
+  const snaps = useMemo(() => {
+    const m = new Map<string, BillingSnapshot | null>();
+    for (const c of clients) m.set(c.id, billingSnapshot(c, asOf));
+    return m;
+  }, [clients, asOf]);
+  const snapOf = (c: DashboardClient) => snaps.get(c.id) ?? null;
 
   const visible = useMemo(() => {
     // Default-exclude logic: hidden and client_paused clients only show under
@@ -200,7 +243,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       return !c.hidden && !c.client_paused;
     });
     list = list.filter((c) => {
-      const d = derive(c, key);
+      const status = snapOf(c)?.status ?? 'pending';
       const allCampaigns = [...c.campaigns, ...c.bisonCampaigns];
       const hasRunning = allCampaigns.some((x) => x.status === 'running');
       const hasLaunched = allCampaigns.some(
@@ -212,11 +255,11 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         case 'client-paused':
           return true;
         case 'risk':
-          return d.status === 'risk';
+          return status === 'risk';
         case 'ok':
-          return d.status === 'ok';
+          return status === 'ok';
         case 'done':
-          return d.metTarget;
+          return status === 'done';
         case 'active':
           return hasRunning;
         case 'paused':
@@ -244,12 +287,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       const days = parseInt(billingWindowFilter, 10);
       const now = new Date();
       list = list.filter((c) => {
-        const bd = nextBillingDate(
-          c.billing_anchor_date ?? c.start_date,
-          c.billing_interval,
-          now,
-          c.billing_interval_days,
-        );
+        const bd = snapOf(c)?.cycle.end;
         if (!bd) return false;
         const du = daysUntil(bd, now);
         return du >= 0 && du <= days;
@@ -264,9 +302,24 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         return true;
       });
     }
-    if (sortBy?.col === 'leftWeek') {
+    if (sortBy?.col === 'introsBilling') {
+      // Most intros still owed this cycle first. No schedule / no target sinks.
       const mul = sortBy.dir === 'desc' ? 1 : -1;
-      list = [...list].sort((a, b) => mul * (derive(b, key).leftThisWeek - derive(a, key).leftThisWeek));
+      const owed = (c: DashboardClient) => {
+        const s = snapOf(c);
+        return s && s.cycle.target > 0 ? s.cycle.remaining : null;
+      };
+      list = [...list].sort((a, b) => {
+        const oa = owed(a);
+        const ob = owed(b);
+        if (oa === null && ob === null) return a.name.localeCompare(b.name);
+        if (oa === null) return 1;
+        if (ob === null) return -1;
+        return mul * (ob - oa) || a.name.localeCompare(b.name);
+      });
+    } else if (sortBy?.col === 'weekEmails') {
+      const mul = sortBy.dir === 'desc' ? 1 : -1;
+      list = [...list].sort((a, b) => mul * (derive(b, key).emails - derive(a, key).emails));
     } else if (sortBy?.col === 'campaigns') {
       const mul = sortBy.dir === 'desc' ? 1 : -1;
       const score = (c: DashboardClient) => {
@@ -342,25 +395,19 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         return -mul * at.localeCompare(bt);
       });
     } else if (sortBy?.col === 'monthly') {
-      // Sort by intros_this_month; clients with monthly_target=0 (unset) sink to bottom.
+      // Sort by intros in the current 28-day period; monthly_target=0 (unset) sinks to bottom.
       const mul = sortBy.dir === 'desc' ? 1 : -1;
       list = [...list].sort((a, b) => {
         if (a.monthly_target === 0 && b.monthly_target === 0) return a.name.localeCompare(b.name);
         if (a.monthly_target === 0) return 1;
         if (b.monthly_target === 0) return -1;
-        return mul * (b.intros_this_month - a.intros_this_month);
+        return mul * ((snapOf(b)?.period.delivered ?? 0) - (snapOf(a)?.period.delivered ?? 0));
       });
     } else if (sortBy?.col === 'lastBilling') {
       // Sort by MOST RECENT billing date on or before today. Null (anchor
       // never reached) sinks to bottom.
       const mul = sortBy.dir === 'desc' ? 1 : -1;
-      const now = new Date();
-      const prev = (c: DashboardClient) => lastBillingDate(
-        c.billing_anchor_date ?? c.start_date,
-        c.billing_interval,
-        now,
-        c.billing_interval_days,
-      );
+      const prev = (c: DashboardClient) => snapOf(c)?.cycle.start ?? null;
       list = [...list].sort((a, b) => {
         const pa = prev(a);
         const pb = prev(b);
@@ -373,12 +420,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       // Sort by NEXT billing date. Clients with no anchor + no start_date can't
       // compute a billing date and always sink to the bottom.
       const mul = sortBy.dir === 'desc' ? 1 : -1;
-      const next = (c: DashboardClient) => nextBillingDate(
-        c.billing_anchor_date ?? c.start_date,
-        c.billing_interval,
-        new Date(),
-        c.billing_interval_days,
-      );
+      const next = (c: DashboardClient) => snapOf(c)?.cycle.end ?? null;
       list = [...list].sort((a, b) => {
         const na = next(a);
         const nb = next(b);
@@ -393,12 +435,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       const mul = sortBy.dir === 'desc' ? 1 : -1;
       const now = new Date();
       const days = (c: DashboardClient) => {
-        const b = nextBillingDate(
-          c.billing_anchor_date ?? c.start_date,
-          c.billing_interval,
-          now,
-          c.billing_interval_days,
-        );
+        const b = snapOf(c)?.cycle.end;
         return b ? daysUntil(b, now) : null;
       };
       list = [...list].sort((a, b) => {
@@ -422,7 +459,8 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       });
     }
     return list;
-  }, [clients, filter, planFilter, tzFilter, billingWindowFilter, sortBy, dateRange, search, key]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clients, filter, planFilter, tzFilter, billingWindowFilter, sortBy, dateRange, search, key, snaps]);
 
   // 1st click = desc (highest first), 2nd = asc, 3rd = reset.
   function cycleSort(col: SortCol) {
@@ -469,15 +507,21 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
     let done = 0;
     let intros = 0;
     let emails = 0;
-    let target = 0;
     let clientPaused = 0;
+    // Performance: only clients whose billing date falls in the viewed week
+    // add to that week's due (cycle target + their carry-forward). Delivered
+    // counts each such client's cycle up to its due, so one client's surplus
+    // can't hide another's shortfall.
+    let dueThisWeek = 0;
+    let deliveredThisWeek = 0;
+    let billingThisWeek = 0;
     const plans = { minimum: 0, production: 0, partner: 0 };
     let convNum = 0;
     let convDen = 0;
     // Funnel totals (Interested → Introduction). All-time across HISTORICAL_WEEKS.
     let convertedTotal = 0;
     let interestedTotal = 0;
-    // Monthly aggregates (per-client current monthly cycle).
+    // Monthly aggregates — each client's current 28-day period.
     let monthlyIntros = 0;
     let monthlyTarget = 0;
     // Campaign-level lifetime totals (sums from campaign-cache tables).
@@ -496,12 +540,18 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         return;
       }
       total++;
-      target += c.weekly_target;
       plans[c.plan]++;
       const d = derive(c, key);
-      if (d.status === 'risk') risk++;
-      if (d.status === 'ok') ok++;
-      if (d.metTarget) done++;
+      const snap = snaps.get(c.id) ?? null;
+      if (snap?.status === 'risk') risk++;
+      if (snap?.status === 'ok') ok++;
+      if (snap?.status === 'done') done++;
+      const dueWeek = billingDueInWeek(c, currentMonday, asOf);
+      if (dueWeek && dueWeek.due > 0) {
+        billingThisWeek++;
+        dueThisWeek += dueWeek.due;
+        deliveredThisWeek += Math.min(dueWeek.delivered, dueWeek.due);
+      }
       intros += d.intros;
       emails += d.emails;
       if (d.emails > 0) {
@@ -530,8 +580,10 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         weeklyIntros += wkNow.intros_corofy ?? 0;
         weeklyInterested += wkNow.interested_corofy ?? 0;
       }
-      monthlyIntros += c.intros_this_month ?? 0;
-      monthlyTarget += c.monthly_target ?? 0;
+      if (snap && snap.period.target > 0) {
+        monthlyIntros += snap.period.delivered;
+        monthlyTarget += snap.period.target;
+      }
       for (const camp of [...c.campaigns, ...c.bisonCampaigns]) {
         campaignReplies += camp.reply_count ?? 0;
         campaignEmailsSent += camp.emails_sent_total ?? 0;
@@ -539,7 +591,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
     });
     const totalFunnel = convertedTotal + interestedTotal;
     const weeklyFunnel = weeklyIntros + weeklyInterested;
-    const completionPct = target > 0 ? Math.round((intros / target) * 100) : 0;
+    const dueCompletionPct = dueThisWeek > 0 ? Math.round((deliveredThisWeek / dueThisWeek) * 100) : null;
     const monthlyCompletionPct = monthlyTarget > 0 ? Math.round((monthlyIntros / monthlyTarget) * 100) : 0;
 
     // Lifetime Funnel — replies from campaigns table, interested from Corofy sum.
@@ -573,10 +625,12 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       done,
       intros,
       emails,
-      target,
       clientPaused,
       plans,
-      completionPct,
+      dueThisWeek,
+      deliveredThisWeek,
+      billingThisWeek,
+      dueCompletionPct,
       monthlyIntros,
       monthlyTarget,
       monthlyCompletionPct,
@@ -609,7 +663,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       // Raw avg (per-1k units, matches the displayed number) for row color logic.
       convAvg: convDen > 0 ? (convNum / convDen) * 1000 : 0,
     };
-  }, [clients, key]);
+  }, [clients, key, snaps, currentMonday, asOf]);
 
   function changeWeek(dir: -1 | 1) {
     setCurrentMonday((d) => addDays(d, dir * 7));
@@ -633,7 +687,6 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
       name: c.name,
       plan: c.plan,
       startDate: c.start_date ?? '',
-      weeklyTarget: c.weekly_target,
       monthlyTarget: c.monthly_target ?? 0,
       billingAnchorDate: c.billing_anchor_date ?? '',
       billingInterval: c.billing_interval ?? 'biweekly',
@@ -670,7 +723,6 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
     const payload = {
       name,
       plan: modal.plan,
-      weekly_target: modal.weeklyTarget,
       monthly_target: modal.monthlyTarget,
       start_date: modal.startDate || null,
       instantly_campaign_ids: linkedIds,
@@ -694,10 +746,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
         );
         setToast('Client updated');
       } else {
+        // weekly_target is NOT NULL in the database and still read by other
+        // apps, so a new client gets its plan default. The dashboard itself no
+        // longer uses it anywhere.
         const res = await fetch('/api/clients', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({ ...payload, weekly_target: PLAN_DEFAULT_TARGET[modal.plan] }),
         });
         if (!res.ok) throw new Error(await res.text());
         const { client } = (await res.json()) as { client: { id: string } };
@@ -705,6 +760,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
           ...list,
           {
             ...payload,
+            weekly_target: PLAN_DEFAULT_TARGET[modal.plan],
             id: client.id,
             campaign_size: 0,
             hidden: false,
@@ -724,6 +780,9 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             total_intros_corofy: 0,
             total_interested_corofy: 0,
             campaign_aliases: aliases,
+            intro_dates: [],
+            toggle_paused_campaigns: [],
+            markets: null,
             campaigns: [],
             bisonCampaigns: [],
             metricsByWeek: {},
@@ -797,6 +856,42 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
     } catch (err) {
       setClients((list) => list.map((c) => (c.id === id ? { ...c, client_paused: !client_paused } : c)));
       setToast(`Failed: ${(err as Error).message.slice(0, 80)}`);
+    }
+  }
+
+  // Campaign Play/Pause: preview (live statuses, nothing sent) → confirm →
+  // apply → per-campaign results, all in one dialog.
+  async function openCampaignToggle(client: DashboardClient, action: 'pause' | 'resume') {
+    setToggleDialog({ client, action, phase: 'loading', plan: null, outcomes: null, error: null });
+    try {
+      const res = await fetch(
+        `/api/clients/campaigns?clientId=${encodeURIComponent(client.id)}&action=${action}`,
+      );
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? res.statusText);
+      setToggleDialog((d) => d && { ...d, phase: 'confirm', plan: body.plan as TogglePlanView });
+    } catch (err) {
+      setToggleDialog((d) => d && { ...d, phase: 'error', error: (err as Error).message });
+    }
+  }
+
+  async function applyCampaignToggle() {
+    const d = toggleDialog;
+    if (!d) return;
+    setToggleDialog({ ...d, phase: 'applying' });
+    try {
+      const res = await fetch('/api/clients/campaigns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: d.client.id, action: d.action }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? res.statusText);
+      const result = body.result as { plan: TogglePlanView; outcomes: ToggleOutcomeView[] };
+      setToggleDialog((cur) => cur && { ...cur, phase: 'done', plan: result.plan, outcomes: result.outcomes });
+      router.refresh();
+    } catch (err) {
+      setToggleDialog((cur) => cur && { ...cur, phase: 'error', error: (err as Error).message });
     }
   }
 
@@ -889,9 +984,9 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             <div className="summary-group-label">Status</div>
             <div className="summary-group-row">
               <SummaryCard label="Clients" cls="n-total" num={summary.total} sub="active" />
-              <SummaryCard label="At Risk" cls="n-risk" num={summary.risk} sub="below half target" />
-              <SummaryCard label="On Track" cls="n-ok" num={summary.ok} sub="meeting target this week" />
-              <SummaryCard label="Done" cls="n-done" num={summary.done} sub="met weekly target" />
+              <SummaryCard label="At Risk" cls="n-risk" num={summary.risk} sub="behind 28-day pace" />
+              <SummaryCard label="On Track" cls="n-ok" num={summary.ok} sub="on pace for 28-day target" />
+              <SummaryCard label="Done" cls="n-done" num={summary.done} sub="28-day target met" />
               <SummaryCard label="Client Paused" cls="n-cpaused" num={summary.clientPaused} sub="manually paused" />
               <SummaryCard
                 label="By Plan"
@@ -905,12 +1000,22 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
           <div className="summary-group">
             <div className="summary-group-label">Performance</div>
             <div className="summary-group-row">
-              <SummaryCard label="Weekly Intros Sent" cls="n-intros" num={summary.intros} sub="across all clients" />
-              <SummaryCard label="Weekly Target" cls="n-target" num={summary.target} sub="intros / week" />
-              <SummaryCard label="Weekly Completion" cls="n-completion" num={`${summary.completionPct}%`} sub="intros vs weekly target" />
-              <SummaryCard label="Monthly Intros Sent" cls="n-intros" num={summary.monthlyIntros} sub="this monthly cycle" />
-              <SummaryCard label="Monthly Target" cls="n-target" num={summary.monthlyTarget} sub="intros / month" />
-              <SummaryCard label="Monthly Completion" cls="n-completion" num={`${summary.monthlyCompletionPct}%`} sub="intros vs monthly target" />
+              <SummaryCard
+                label="Due This Week"
+                cls="n-target"
+                num={summary.dueThisWeek}
+                sub={`${summary.billingThisWeek} client${summary.billingThisWeek === 1 ? '' : 's'} billing this week`}
+              />
+              <SummaryCard label="Delivered" cls="n-intros" num={summary.deliveredThisWeek} sub="toward this week's due" />
+              <SummaryCard
+                label="Due Completion"
+                cls="n-completion"
+                num={summary.dueCompletionPct === null ? '—' : `${summary.dueCompletionPct}%`}
+                sub="delivered vs due this week"
+              />
+              <SummaryCard label="Monthly Intros Sent" cls="n-intros" num={summary.monthlyIntros} sub="this 28-day period" />
+              <SummaryCard label="Monthly Target" cls="n-target" num={summary.monthlyTarget} sub="intros / 28 days" />
+              <SummaryCard label="Monthly Completion" cls="n-completion" num={`${summary.monthlyCompletionPct}%`} sub="intros vs 28-day target" />
             </div>
           </div>
 
@@ -964,7 +1069,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
               <button className={'fpill' + (filter === 'all' ? ' active' : '')} onClick={() => setFilter('all')}>All</button>
               <button className={'fpill f-risk' + (filter === 'risk' ? ' active' : '')} onClick={() => setFilter('risk')}>At Risk</button>
               <button className={'fpill f-ok' + (filter === 'ok' ? ' active' : '')} onClick={() => setFilter('ok')}>On Track</button>
-              <button className={'fpill f-ok' + (filter === 'done' ? ' active' : '')} onClick={() => setFilter('done')} title="Clients who reached their weekly intro target">Done</button>
+              <button className={'fpill f-ok' + (filter === 'done' ? ' active' : '')} onClick={() => setFilter('done')} title="Clients who reached their 28-day intro target">Done</button>
               <button className={'fpill' + (filter === 'active' ? ' active' : '')} onClick={() => setFilter('active')} title="Clients with at least one running campaign">Active</button>
               <button className={'fpill' + (filter === 'paused' ? ' active' : '')} onClick={() => setFilter('paused')} title="Clients whose campaigns are paused or finished (no running)">Campaign Paused</button>
               <button className={'fpill' + (filter === 'inactive' ? ' active' : '')} onClick={() => setFilter('inactive')} title="Clients with no campaign launched yet">Inactive</button>
@@ -1102,7 +1207,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                     <th
                       className={'sortable' + (sortBy?.col === 'monthly' ? ' sorted' : '')}
                       onClick={() => cycleSort('monthly')}
-                      title="Intros this monthly cycle (starts on the billing anchor day-of-month). — for clients with no monthly target set."
+                      title="Intros in the current 28-day period (two back-to-back 14-day billing cycles) vs the monthly target. Resets when the full 28 days end. — when no monthly target is set."
                     >
                       Monthly <em className="sort-icon">{sortIcon('monthly')}</em>
                     </th>
@@ -1135,11 +1240,25 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       Days Until Billing <em className="sort-icon">{sortIcon('billingDays')}</em>
                     </th>
                     <th
+                      className={'sortable' + (sortBy?.col === 'introsBilling' ? ' sorted' : '')}
+                      onClick={() => cycleSort('introsBilling')}
+                      title="Intros delivered since the last billing date / intros due by the next one (cycle target + any carry-forward). Sort by intros still owed."
+                    >
+                      Intros / Billing <em className="sort-icon">{sortIcon('introsBilling')}</em>
+                    </th>
+                    <th
                       className={'sortable' + (sortBy?.col === 'today' ? ' sorted' : '')}
                       onClick={() => cycleSort('today')}
                       title="Sort by emails sent today (EST) — click to cycle desc / asc / reset"
                     >
                       Daily Emails Sent <em className="sort-icon">{sortIcon('today')}</em>
+                    </th>
+                    <th
+                      className={'sortable' + (sortBy?.col === 'weekEmails' ? ' sorted' : '')}
+                      onClick={() => cycleSort('weekEmails')}
+                      title="Emails sent Monday–Sunday of the selected week, all campaigns — click to cycle desc / asc / reset"
+                    >
+                      Weekly Emails Sent <em className="sort-icon">{sortIcon('weekEmails')}</em>
                     </th>
                     <th
                       className={'sortable' + (sortBy?.col === 'intros' ? ' sorted' : '')}
@@ -1156,20 +1275,13 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       Conv. Rate <em className="sort-icon">{sortIcon('conv')}</em>
                     </th>
                     <th
-                      className={'sortable' + (sortBy?.col === 'leftWeek' ? ' sorted' : '')}
-                      onClick={() => cycleSort('leftWeek')}
-                      title="Sort by intros left this week — click to cycle desc / asc / reset"
-                    >
-                      Left This Week <em className="sort-icon">{sortIcon('leftWeek')}</em>
-                    </th>
-                    <th
                       className={'sortable' + (sortBy?.col === 'progress' ? ' sorted' : '')}
                       onClick={() => cycleSort('progress')}
                       title="Sort by average campaign progress — click to cycle desc / asc / reset"
                     >
                       Campaign Progress <em className="sort-icon">{sortIcon('progress')}</em>
                     </th>
-                    <th>Status</th>
+                    <th title="At Risk / On Track against the 28-day target, by where the client stands in the period (includes any carried-forward intros).">Status</th>
                     <th
                       className={'sortable' + (sortBy?.col === 'interested' ? ' sorted' : '')}
                       onClick={() => cycleSort('interested')}
@@ -1202,6 +1314,8 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                       key={c.id}
                       client={c}
                       weekKey={key}
+                      snap={snapOf(c)}
+                      onToggleCampaigns={(action) => openCampaignToggle(c, action)}
                       campaignSelection={campaignSelections[c.id] ?? '__avg__'}
                       convAvg={summary.convAvg}
                       onCampaignChange={(camp) =>
@@ -1220,6 +1334,97 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
           </div>
         </div>
       </main>
+
+      {toggleDialog && (
+        <div
+          className="modal-overlay open"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && toggleDialog.phase !== 'applying') setToggleDialog(null);
+          }}
+        >
+          <div className="modal toggle-modal">
+            <h2>
+              {toggleDialog.action === 'pause' ? 'Pause' : 'Resume'} campaigns — {toggleDialog.client.name}
+            </h2>
+            {toggleDialog.phase === 'loading' && <p>Checking live campaign status on Instantly and Bison…</p>}
+            {toggleDialog.phase === 'error' && <p className="toggle-error">Could not complete: {toggleDialog.error}</p>}
+            {toggleDialog.plan && toggleDialog.phase !== 'done' && toggleDialog.phase !== 'error' && (
+              <>
+                <p>
+                  {toggleDialog.plan.willChange.length === 0
+                    ? `Nothing to ${toggleDialog.action}.`
+                    : toggleDialog.action === 'pause'
+                      ? `These ${toggleDialog.plan.willChange.length} campaign(s) will stop sending. Client status, portal and billing are not changed.`
+                      : `These ${toggleDialog.plan.willChange.length} campaign(s), paused from here, will start sending again.`}
+                </p>
+                {toggleDialog.action === 'resume' && toggleDialog.plan.willChange.some((c) => c.platform === 'bison') && (
+                  <p className="toggle-warn">
+                    Bison resumes by queuing: those campaigns start emailing their remaining leads straight away.
+                  </p>
+                )}
+                <ul className="toggle-list">
+                  {toggleDialog.plan.willChange.map((c) => (
+                    <li key={c.platform + c.id}>
+                      <span className={`src-chip src-${c.platform}`}>{c.platform === 'instantly' ? 'Instantly' : 'Bison'}</span>
+                      {c.name}
+                    </li>
+                  ))}
+                </ul>
+                {toggleDialog.plan.skipped.length > 0 && (
+                  <details className="toggle-skipped">
+                    <summary>{toggleDialog.plan.skipped.length} left alone</summary>
+                    <ul className="toggle-list">
+                      {toggleDialog.plan.skipped.map((s) => (
+                        <li key={s.campaign.platform + s.campaign.id}>
+                          {s.campaign.name} <em>— {s.reason}</em>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </>
+            )}
+            {toggleDialog.phase === 'done' && toggleDialog.outcomes && (
+              <>
+                <p>
+                  {toggleDialog.outcomes.filter((o) => o.ok).length} of {toggleDialog.outcomes.length}{' '}
+                  {toggleDialog.action === 'pause' ? 'paused' : 'resumed'}.
+                </p>
+                <ul className="toggle-list">
+                  {toggleDialog.outcomes.map((o) => (
+                    <li key={o.campaign.platform + o.campaign.id} className={o.ok ? 'toggle-ok' : 'toggle-fail'}>
+                      {o.ok ? '✓' : '✕'} {o.campaign.name}
+                      {!o.ok && o.error && <em> — {o.error}</em>}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            <div className="modal-actions">
+              {toggleDialog.phase === 'done' || toggleDialog.phase === 'error' ? (
+                <button className="btn-primary" onClick={() => setToggleDialog(null)}>Close</button>
+              ) : (
+                <>
+                  <button
+                    className="btn-secondary"
+                    disabled={toggleDialog.phase === 'applying'}
+                    onClick={() => setToggleDialog(null)}
+                  >Cancel</button>
+                  <button
+                    className={toggleDialog.action === 'pause' ? 'btn-danger' : 'btn-primary'}
+                    disabled={toggleDialog.phase !== 'confirm' || !toggleDialog.plan?.willChange.length}
+                    onClick={applyCampaignToggle}
+                  >
+                    {toggleDialog.phase === 'applying'
+                      ? 'Working…'
+                      : `${toggleDialog.action === 'pause' ? 'Pause' : 'Resume'} ${toggleDialog.plan?.willChange.length ?? 0}`}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       <div
         className={'modal-overlay' + (modal.open ? ' open' : '')}
@@ -1252,36 +1457,12 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
             <label>Plan</label>
             <select
               value={modal.plan}
-              onChange={(e) => {
-                const plan = e.target.value as Plan;
-                setModal((m) => ({
-                  ...m,
-                  plan,
-                  // Bump target to plan default only if user hasn't customized away from another plan default.
-                  weeklyTarget:
-                    Object.values(PLAN_DEFAULT_TARGET).includes(m.weeklyTarget)
-                      ? PLAN_DEFAULT_TARGET[plan]
-                      : m.weeklyTarget,
-                }));
-              }}
+              onChange={(e) => setModal((m) => ({ ...m, plan: e.target.value as Plan }))}
             >
-              <option value="minimum">Minimum — 1 intro/week</option>
-              <option value="production">Production — 3 intros/week</option>
-              <option value="partner">Partner — 6 intros/week</option>
+              <option value="minimum">Minimum</option>
+              <option value="production">Production</option>
+              <option value="partner">Partner</option>
             </select>
-          </div>
-
-          <div className="form-group">
-            <label>Weekly Intros Target</label>
-            <input
-              type="number"
-              min={0}
-              value={modal.weeklyTarget}
-              onChange={(e) =>
-                setModal((m) => ({ ...m, weeklyTarget: parseInt(e.target.value || '0', 10) }))
-              }
-            />
-            <div className="form-help">Drives the At Risk / On Track status. Defaults to plan tier (1/3/6) but you can override.</div>
           </div>
 
           <div className="form-group">
@@ -1294,7 +1475,7 @@ export default function Dashboard({ initialClients, allInstantlyCampaigns, allBi
                 setModal((m) => ({ ...m, monthlyTarget: parseInt(e.target.value || '0', 10) }))
               }
             />
-            <div className="form-help">Progress resets on the client&apos;s billing anchor day each calendar month. 0 hides the column.</div>
+            <div className="form-help">Intros due per 28-day period. Split across billing cycles — e.g. 8 = 4 due every 14-day cycle. Drives At Risk / On Track, Intros / Billing and carry-forward. 0 = no target.</div>
           </div>
 
           <div className="form-group">
@@ -1623,29 +1804,18 @@ function BiWeeklyTable({
     return sortBy.dir === 'desc' ? '↓' : '↑';
   }
   const rows = clients.map((c) => {
-    const anchor = c.billing_anchor_date ?? c.start_date;
-    const billing = nextBillingDate(anchor, c.billing_interval, today, c.billing_interval_days);
+    // Same billing-cycle engine as the Weekly view: intros since the last
+    // billing date vs what's due by the next (cycle target from the monthly
+    // target, plus any carry-forward).
+    const snap = billingSnapshot(c, today);
+    const cycle = snap && snap.cycle.target > 0 ? snap.cycle : null;
+    const billing = snap?.cycle.end ?? null;
     const days = billing ? daysUntil(billing, today) : null;
-    // "Introductions since last billing" — precomputed by the sync worker
-    // using each intro's assigned_at + the client's billing anchor. Preserves
-    // per-billing-cycle semantics that biweeklyIntros() can't offer.
-    const intros = c.intros_since_last_billing;
-    // Cycle target proportional to the billing interval — a monthly client's
-    // "target" for one cycle is ~4 weeks of their weekly target, not just
-    // the fixed biweekly number.
-    const cycleDays = c.billing_interval === 'biweekly' ? 14
-                    : c.billing_interval === '28-days' ? 28
-                    : c.billing_interval === 'monthly' ? 30
-                    : c.billing_interval === 'custom' ? (c.billing_interval_days ?? 14)
-                    : 14;
-    const target = Math.max(1, Math.round((c.weekly_target * cycleDays) / 7));
-    // "Introductions Left This Cycle" — cycleTarget minus intros-since-last-
-    // billing. Parallels the Introductions column (which uses the same
-    // cycle definition) so a single glance tells you where in the cycle
-    // the client stands.
-    const leftCycle = Math.max(0, target - intros);
+    const intros = cycle?.delivered ?? 0;
+    const target = cycle?.required ?? 0;
+    const leftCycle = cycle?.remaining ?? 0;
     const tzShort = c.time_zone ? (TZ_SHORT_BY_VALUE[c.time_zone] ?? c.time_zone) : null;
-    return { c, billing, days, intros, target, leftCycle, tzShort };
+    return { c, billing, days, intros, target, leftCycle, tzShort, cycle };
   });
   type Row = (typeof rows)[number];
   const defaultCmp = (a: Row, b: Row) => {
@@ -1726,7 +1896,7 @@ function BiWeeklyTable({
           <th
             className={'sortable' + (sortBy?.col === 'intros' ? ' sorted' : '')}
             onClick={() => cycleSort('intros')}
-            title="Introductions since the client's last billing day — click to cycle desc / asc / reset"
+            title="Introductions since the last billing date / due by the next (cycle target + carry-forward) — click to cycle desc / asc / reset"
           >
             Introductions <em className="sort-icon">{sortIcon('intros')}</em>
           </th>
@@ -1740,12 +1910,15 @@ function BiWeeklyTable({
         </tr>
       </thead>
       <tbody>
-        {sorted.map(({ c, billing, days, intros, target, leftCycle, tzShort }) => {
+        {sorted.map(({ c, billing, days, intros, target, leftCycle, tzShort, cycle }) => {
           const introsCls =
-            intros >= target ? 'bw-done' : intros >= Math.ceil(target / 2) ? 'bw-mid' : 'bw-short';
+            intros >= target ? 'bw-done'
+            : cycle && cycle.carryIn > 0 ? 'bw-short'
+            : intros >= Math.ceil(target / 2) ? 'bw-mid' : 'bw-short';
           const leftCls = leftCycle === 0 ? 'bw-done' : 'bw-short';
+          const behind = !!cycle && cycle.carryIn > 0 && cycle.remaining > 0;
           return (
-            <tr key={c.id}>
+            <tr key={c.id} className={behind ? 'has-carry' : undefined}>
               <td className="client-cell">
                 <div className="client-name">{c.name}</div>
               </td>
@@ -1775,12 +1948,23 @@ function BiWeeklyTable({
                   )}
               </td>
               <td>
-                <span className={introsCls}>{intros}/{target}</span>
+                {cycle ? (
+                  <div className="ib-cell">
+                    <span className={introsCls}>{intros}/{target}</span>
+                    <CarryBadge cycle={cycle} />
+                  </div>
+                ) : (
+                  <span className="api-none" title="No monthly target or billing date set">—</span>
+                )}
               </td>
               <td>
-                <span className={leftCls}>
-                  {leftCycle === 0 ? 'Done' : `${leftCycle} left`}
-                </span>
+                {cycle ? (
+                  <span className={leftCls}>
+                    {leftCycle === 0 ? 'Done' : `${leftCycle} left`}
+                  </span>
+                ) : (
+                  <span className="api-none">—</span>
+                )}
               </td>
             </tr>
           );
@@ -1876,7 +2060,7 @@ function ClientSuccessTable({
       }
       hiredTotal += m.hired_corofy ?? 0;
     }
-    const scoreInfo = clientScore(c.metricsByWeek, c.weekly_target, nowDate);
+    const scoreInfo = clientScore(c, nowDate);
     return {
       c,
       hiredTotal,
@@ -1944,7 +2128,7 @@ function ClientSuccessTable({
           <th
             className={'sortable cs-num' + (sortBy?.col === 'score' ? ' sorted' : '')}
             onClick={() => cycleSort('score')}
-            title="0–10 rating over the last 8 weeks. Higher = hits weekly target more consistently and with more headroom."
+            title="0–10 rating over the last 4 completed billing cycles. Higher = hits the cycle target more consistently and with more headroom."
           >
             Score <em className="sort-icon">{sortIcon('score')}</em>
           </th>
@@ -2079,9 +2263,82 @@ function convClassFor(pct: number | null, avg: number): 'good' | 'mid' | 'low' |
   return 'low';
 }
 
+const fmtMDY = (d: Date) =>
+  `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}/${d.getUTCFullYear()}`;
+
+// Overdue / carry-forward indicator. Rendered wherever a client's intro
+// progress appears, only when intros carried over from a previous billing
+// cycle. Hover or focus opens the four numbers the spec asks for, so nobody
+// has to work out "4 + 2 − 2" by hand.
+function CarryBadge({ cycle }: { cycle: CycleState }) {
+  // Fixed-position popover: the table scrolls inside an overflow container
+  // that would clip an absolutely-positioned one at the edges.
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  if (cycle.carryIn <= 0) return null;
+  const outstanding = cycle.remaining > 0;
+  const open = (e: React.SyntheticEvent<HTMLElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const width = 240;
+    const left = Math.min(Math.max(8, r.left + r.width / 2 - width / 2), window.innerWidth - width - 8);
+    const below = r.bottom + 8;
+    setPos({ top: below + 150 > window.innerHeight ? r.top - 158 : below, left });
+  };
+  return (
+    <span
+      className={'carry-badge' + (outstanding ? '' : ' carry-cleared')}
+      tabIndex={0}
+      onMouseEnter={open}
+      onFocus={open}
+      onMouseLeave={() => setPos(null)}
+      onBlur={() => setPos(null)}
+      aria-label={`${cycle.carryIn} intros carried forward. Cycle target ${cycle.target}, delivered ${cycle.delivered}, total required ${cycle.required}.`}
+    >
+      +{cycle.carryIn} carried
+      {pos && (
+        <span className="carry-pop" role="tooltip" style={{ top: pos.top, left: pos.left }}>
+          <span className="carry-pop-title">{outstanding ? 'Behind — intros carried forward' : 'Carried intros cleared'}</span>
+          <span className="carry-pop-row"><span>Current cycle target</span><b>{cycle.target}</b></span>
+          <span className="carry-pop-row"><span>Delivered</span><b>{cycle.delivered}</b></span>
+          <span className="carry-pop-row carry-pop-over"><span>Overdue / carry-forward</span><b>+{cycle.carryIn}</b></span>
+          <span className="carry-pop-row carry-pop-total"><span>Total intros now required</span><b>{cycle.required}</b></span>
+        </span>
+      )}
+    </span>
+  );
+}
+
+// "2 / 6 due" — delivered since the last billing date vs required by the next.
+function IntrosBillingCell({
+  snap,
+  onSetBilling,
+}: {
+  snap: BillingSnapshot | null;
+  onSetBilling: () => void;
+}) {
+  if (!snap) return <button className="set-date-link" onClick={onSetBilling}>Set billing date</button>;
+  const cy = snap.cycle;
+  if (cy.target <= 0) return <span className="api-none" title="No monthly target set">—</span>;
+  const cls =
+    cy.remaining === 0 ? 'bw-done'
+    : cy.carryIn > 0 ? 'bw-short'
+    : cy.delivered >= Math.ceil(cy.required / 2) ? 'bw-mid'
+    : 'bw-short';
+  return (
+    <div className="ib-cell">
+      <span className={cls} title={`${cy.delivered} delivered since last billing · ${cy.required} due by next billing`}>
+        {cy.delivered} / {cy.required}
+      </span>
+      <span className="ib-due">due</span>
+      <CarryBadge cycle={cy} />
+    </div>
+  );
+}
+
 function ClientRow({
   client,
   weekKey: wk,
+  snap,
+  onToggleCampaigns,
   campaignSelection,
   convAvg,
   onCampaignChange,
@@ -2093,6 +2350,8 @@ function ClientRow({
 }: {
   client: DashboardClient;
   weekKey: string;
+  snap: BillingSnapshot | null;
+  onToggleCampaigns: (action: 'pause' | 'resume') => void;
   campaignSelection: string;
   convAvg: number;
   onCampaignChange: (id: string) => void;
@@ -2122,31 +2381,37 @@ function ClientRow({
     <span className="api-none">—</span>
   );
 
-  // intros cell — read-only number from MasterInbox
-  const introClass = client.weekly_target === 0 ? '' : d.metTarget ? 'ok' : 'risk';
+  // Intros this week — a plain count. There is no weekly target any more;
+  // what's owed lives in Intros / Billing and Monthly.
   const introsCell = (
-    <input
-      type="number"
-      readOnly
-      className={`metric-input ${introClass}`}
-      value={d.intros}
-    />
+    <input type="number" readOnly className="metric-input" value={d.intros} />
   );
 
-  // monthly progress — X / Y where X = intros_this_month, Y = monthly_target.
-  // Rendered as an X/Y pill with the same tier coloring the Bi-Weekly view uses
-  // (green when at or above target, orange at ≥ half, red below half). Missing
-  // target (0) renders as a muted em-dash so unset clients don't clutter the row.
-  const monthlyCell = client.monthly_target === 0 ? (
+  // Weekly emails — Monday→Sunday of the selected week, all linked campaigns.
+  const weekEmailsCell = d.emails > 0 ? (
+    <span className="api-num">{d.emails.toLocaleString()}</span>
+  ) : (
+    <span className="api-none">—</span>
+  );
+
+  // Monthly — intros in the current 28-day period (both billing cycles) vs
+  // the monthly target, e.g. 6/8. Resets only when the full 28 days end.
+  // Colour follows pace: green at target, orange on pace, red behind.
+  const period = snap?.period ?? null;
+  const monthlyCell = !snap || !period || period.target <= 0 ? (
     <span className="api-none">—</span>
   ) : (
-    <span className={
-      client.intros_this_month >= client.monthly_target ? 'bw-done'
-      : client.intros_this_month >= Math.ceil(client.monthly_target / 2) ? 'bw-mid'
-      : 'bw-short'
-    }>
-      {client.intros_this_month}/{client.monthly_target}
-    </span>
+    <div className="ib-cell">
+      <span
+        className={
+          snap.status === 'done' ? 'bw-done' : snap.status === 'ok' ? 'bw-mid' : 'bw-short'
+        }
+        title={`28-day period ${fmtMDY(period.start)} → ${fmtMDY(period.end)} · day ${period.elapsedDays} of ${period.totalDays} · ${period.expected} expected by now`}
+      >
+        {period.delivered}/{period.target}
+      </span>
+      <CarryBadge cycle={snap.cycle} />
+    </div>
   );
 
   // Time-zone short code for the Weekly view — reuses TZ_SHORT_BY_VALUE
@@ -2156,12 +2421,8 @@ function ClientRow({
   // Next + last billing date — same computations the Bi-Weekly view uses.
   // When no anchor + no start_date the date can't be derived; renders a
   // "Set" button that opens the Edit modal so it can be filled in one click.
-  const fmtMDY = (d: Date) =>
-    `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}/${d.getUTCFullYear()}`;
-  const now_ = new Date();
-  const anchor_ = client.billing_anchor_date ?? client.start_date;
-  const lastBillingD = lastBillingDate(anchor_, client.billing_interval, now_, client.billing_interval_days);
-  const billingDate = nextBillingDate(anchor_, client.billing_interval, now_, client.billing_interval_days);
+  const lastBillingD = snap?.cycle.start ?? null;
+  const billingDate = snap?.cycle.end ?? null;
   const lastBillingCell = lastBillingD ? (
     <span className="cs-date">{fmtMDY(lastBillingD)}</span>
   ) : (
@@ -2227,23 +2488,14 @@ function ClientRow({
       <span className={`conv-rate conv-${convCls}`}>{d.convPct.toFixed(1)}%</span>
     );
 
-  // left cell — gray "0" once the weekly target is met
-  const leftCell =
-    client.weekly_target === 0 ? (
-      <span className="left-none">—</span>
-    ) : d.metTarget ? (
-      <span className="left-zero">0</span>
-    ) : (
-      <span className="left-pill left-short">{d.leftThisWeek} left</span>
-    );
-
   // status badge — Done supersedes On Track when target is met
+  const status = snap?.status ?? 'pending';
   const statusCell =
-    d.status === 'pending' ? (
+    status === 'pending' ? (
       <span className="status-badge s-pending"><span className="status-dot" />Pending</span>
-    ) : d.status === 'risk' ? (
+    ) : status === 'risk' ? (
       <span className="status-badge s-risk"><span className="status-dot" />At Risk</span>
-    ) : d.status === 'done' ? (
+    ) : status === 'done' ? (
       <span className="status-badge s-done"><span className="status-dot" />Done</span>
     ) : (
       <span className="status-badge s-ok"><span className="status-dot" />On Track</span>
@@ -2355,7 +2607,40 @@ function ClientRow({
       })
     : null;
 
-  const rowCls = client.hidden ? 'is-hidden' : client.client_paused ? 'is-client-paused' : '';
+  const behind = !!snap && snap.cycle.carryIn > 0 && snap.cycle.remaining > 0;
+  const rowCls = [
+    client.hidden ? 'is-hidden' : client.client_paused ? 'is-client-paused' : '',
+    behind ? 'has-carry' : '',
+  ].filter(Boolean).join(' ');
+
+  // Markets covered, from the BrokerStaffer OS. null = OS not reachable.
+  const markets = client.markets;
+  const marketsLine = markets === null ? null : (
+    <div
+      className={'client-markets' + (markets.length === 0 ? ' is-empty' : '')}
+      title={markets.length ? markets.map(describeMarket).join('\n') : 'No markets added in the OS yet'}
+    >
+      {markets.length === 0 ? 'No markets' : `${markets.length} market${markets.length === 1 ? '' : 's'}`}
+    </div>
+  );
+
+  // Play/Pause for every campaign of this client. "Paused" means this toggle
+  // is holding campaigns paused — Play resumes exactly those.
+  const held = client.toggle_paused_campaigns?.length ?? 0;
+  const campToggle = held > 0 ? (
+    <button
+      className="camp-toggle is-paused"
+      title={`Campaigns paused from here (${held}). Click to resume them.`}
+      onClick={(e) => { e.stopPropagation(); onToggleCampaigns('resume'); }}
+    >▶</button>
+  ) : (
+    <button
+      className="camp-toggle"
+      disabled={activeCampaigns.length === 0}
+      title={activeCampaigns.length ? `Pause all ${activeCampaigns.length} running campaign${activeCampaigns.length === 1 ? '' : 's'}` : 'No running campaigns to pause'}
+      onClick={(e) => { e.stopPropagation(); onToggleCampaigns('pause'); }}
+    >⏸</button>
+  );
   return (
     <tr className={rowCls}>
       <td className="client-cell">
@@ -2371,12 +2656,14 @@ function ClientRow({
               onClick={(e) => e.stopPropagation()}
             >↗</a>
           )}
+          {campToggle}
           {client.hidden && <span className="hidden-badge">Churned</span>}
           {!client.hidden && client.client_paused && (
             <span className="client-paused-badge">Client Paused</span>
           )}
         </div>
         {since && <div className="client-since">Since {since}</div>}
+        {marketsLine}
         <div
           className={
             'client-meta'
@@ -2406,10 +2693,11 @@ function ClientRow({
       <td>{lastBillingCell}</td>
       <td>{billingCell}</td>
       <td>{billingDaysCell}</td>
+      <td><IntrosBillingCell snap={snap} onSetBilling={onEdit} /></td>
       <td>{todayCell}</td>
+      <td>{weekEmailsCell}</td>
       <td>{introsCell}</td>
       <td>{convCell}</td>
-      <td>{leftCell}</td>
       <td>{campaignCell}</td>
       <td>{statusCell}</td>
       <td>{interestedCell}</td>

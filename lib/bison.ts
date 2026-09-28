@@ -156,3 +156,35 @@ export function bisonProgressPct(c: BisonCampaignSummary): number {
 export function bisonCampaignSize(c: BisonCampaignSummary): number {
   return c.total_leads ?? 0;
 }
+
+// --- Campaign Play/Pause (used by lib/campaign-toggle.ts) -----------------
+// Integer ids only — Bison's per-campaign endpoints 404 on the uuid.
+
+async function patch(path: string): Promise<unknown> {
+  const res = await fetch(BASE + path, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${key()}`, Accept: 'application/json' },
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Bison ${path} ${res.status}: ${body.slice(0, 200)}`);
+  }
+  return res.json().catch(() => ({}));
+}
+
+/** Live status straight from Bison, lower-cased (active, queued, paused, completed, …). */
+export async function getBisonCampaignStatus(intId: number): Promise<string | null> {
+  const r = await get<{ data?: { status?: string }; status?: string }>(`/api/campaigns/${intId}`);
+  const status = r?.data?.status ?? r?.status;
+  return status ? String(status).toLowerCase() : null;
+}
+
+export function pauseBisonCampaign(intId: number): Promise<unknown> {
+  return patch(`/api/campaigns/${intId}/pause`);
+}
+
+/** paused → queued: Bison starts sending to the campaign's remaining leads. */
+export function resumeBisonCampaign(intId: number): Promise<unknown> {
+  return patch(`/api/campaigns/${intId}/resume`);
+}

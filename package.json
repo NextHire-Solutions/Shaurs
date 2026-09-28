@@ -11,7 +11,8 @@
     "start": "next start -p ${PORT:-3000}",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "sync": "tsx scripts/sync.ts"
+    "sync": "tsx scripts/sync.ts",
+    "test": "tsx --test lib/*.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",

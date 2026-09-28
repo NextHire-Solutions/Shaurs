@@ -1,4 +1,5 @@
 import type { BillingInterval, DashboardClient, WeeklyMetric } from './types';
+import { completedCycles } from './billing';
 
 const EMPTY_METRIC: Omit<WeeklyMetric, 'client_id' | 'week_key'> = {
   emails_sent: 0,
@@ -170,56 +171,38 @@ export function daysUntil(target: Date, today: Date = new Date()): number {
   return Math.round((t1.getTime() - t0.getTime()) / 86400000);
 }
 
-// Client Score — 0.0–10.0 rating of how easily a client hits their weekly
-// intros target over the last SCORE_WINDOW_WEEKS. Two blended signals:
-//   hitRate   = fraction of usable weeks where intros >= weekly_target (0..1)
-//   avgRatio  = mean of min(intros / weekly_target, 2.0) across the same weeks
+// Client Score — 0.0–10.0 rating of how reliably a client's billing cycles
+// hit their target. Over the last SCORE_WINDOW_CYCLES completed cycles:
+//   hitRate   = fraction of cycles where delivered >= cycle target (0..1)
+//   avgRatio  = mean of min(delivered / cycle target, 2.0)
 // Combined:  score = 10 * (0.7 * hitRate + 0.15 * avgRatio)
 //   → 0.7 rewards consistency, 0.15 (max 0.3) rewards volume above target,
-//     capped at 2× target so a single huge week doesn't dominate.
+//     capped at 2× so a single huge cycle doesn't dominate.
 // Anchors: always ≥2× target → 10.0, always exactly at target → 8.5,
-// zero every week → 0.0. Returns null when fewer than SCORE_MIN_WEEKS
-// usable weeks are present (brand-new clients don't get a misleading score).
+// zero every cycle → 0.0. Null with fewer than SCORE_MIN_CYCLES completed
+// cycles, or no monthly target, so brand-new clients don't get a misleading
+// score. Uses the base cycle target, not carry-forward: the score is about
+// each cycle's own delivery.
 export interface ClientScore {
-  score: number | null;  // 0.0–10.0 rounded to 1 decimal, null when < SCORE_MIN_WEEKS
-  weeksUsed: number;
+  score: number | null;
+  cyclesUsed: number;
   hitRate: number;
   avgRatio: number;
 }
-const SCORE_WINDOW_WEEKS = 8;
-const SCORE_MIN_WEEKS = 3;
+const SCORE_WINDOW_CYCLES = 4;
+const SCORE_MIN_CYCLES = 2;
 const RATIO_CAP = 2.0;
-export function clientScore(
-  metricsByWeek: Record<string, WeeklyMetric>,
-  weeklyTarget: number,
-  today: Date = new Date(),
-): ClientScore {
-  if (weeklyTarget <= 0) {
-    return { score: null, weeksUsed: 0, hitRate: 0, avgRatio: 0 };
+export function clientScore(c: DashboardClient, today: Date = new Date()): ClientScore {
+  const cycles = completedCycles(c, today, SCORE_WINDOW_CYCLES);
+  if (cycles.length < SCORE_MIN_CYCLES) {
+    return { score: null, cyclesUsed: cycles.length, hitRate: 0, avgRatio: 0 };
   }
-  const anchor = getMondayOf(today);
-  const usable: number[] = [];
-  for (let i = 0; i < SCORE_WINDOW_WEEKS; i++) {
-    const wk = weekKey(addDays(anchor, -7 * i));
-    const m = metricsByWeek[wk];
-    if (!m) continue;
-    usable.push(m.intros_corofy ?? 0);
-  }
-  if (usable.length < SCORE_MIN_WEEKS) {
-    return { score: null, weeksUsed: usable.length, hitRate: 0, avgRatio: 0 };
-  }
-  const hits = usable.filter((n) => n >= weeklyTarget).length;
-  const hitRate = hits / usable.length;
+  const hits = cycles.filter((x) => x.delivered >= x.target).length;
+  const hitRate = hits / cycles.length;
   const avgRatio =
-    usable.reduce((s, n) => s + Math.min(n / weeklyTarget, RATIO_CAP), 0) /
-    usable.length;
+    cycles.reduce((sum, x) => sum + Math.min(x.delivered / x.target, RATIO_CAP), 0) / cycles.length;
   const raw = 10 * (0.7 * hitRate + 0.15 * avgRatio);
-  return {
-    score: Math.round(raw * 10) / 10,
-    weeksUsed: usable.length,
-    hitRate,
-    avgRatio,
-  };
+  return { score: Math.round(raw * 10) / 10, cyclesUsed: cycles.length, hitRate, avgRatio };
 }
 
 // Intros in the last 14 days = current Monday-week + previous Monday-week
@@ -259,11 +242,8 @@ export interface DerivedRow {
   interested: number; // Corofy "Interested" count for the visible week
   hasEmails: boolean;
   hasIntros: boolean;
-  metTarget: boolean;
-  status: 'risk' | 'ok' | 'done' | 'pending';
   convPct: number | null; // intros per 1,000 emails (displayed with "%" suffix per product spec)
   convClass: 'good' | 'mid' | 'low' | 'none';
-  leftThisWeek: number; // 0 if met
   daysSince: number | null;
   campaignsAvgPct: number;
 }
@@ -276,16 +256,8 @@ export function derive(c: DashboardClient, weekKey: string): DerivedRow {
   const hasIntros = intros > 0 || lastAt !== null;
   const emails = m.emails_sent;
 
-  const metTarget = c.weekly_target > 0 && intros >= c.weekly_target;
-  // Status precedence: pending (no target) → done (target met) → risk
-  // (below half) → ok (between half and target).
-  const status: 'risk' | 'ok' | 'done' | 'pending' = c.weekly_target === 0
-    ? 'pending'
-    : metTarget
-      ? 'done'
-      : intros < c.weekly_target / 2
-        ? 'risk'
-        : 'ok';
+  // No weekly target any more: status, "done" and "left" come from the
+  // client's billing cycle and 28-day period (lib/billing.ts).
 
   let convPct: number | null = null;
   let convClass: 'good' | 'mid' | 'low' | 'none' = 'none';
@@ -293,8 +265,6 @@ export function derive(c: DashboardClient, weekKey: string): DerivedRow {
     convPct = (intros / emails) * 1000;
     convClass = convPct >= 50 ? 'good' : convPct >= 20 ? 'mid' : 'low';
   }
-
-  const leftThisWeek = Math.max(0, c.weekly_target - intros);
 
   // Match the displayed Campaign Progress cell exactly: weighted average
   // across ACTIVE (running) campaigns only, union of Instantly + Bison.
@@ -317,11 +287,8 @@ export function derive(c: DashboardClient, weekKey: string): DerivedRow {
     interested: m.interested_corofy ?? 0,
     hasEmails,
     hasIntros,
-    metTarget,
-    status,
     convPct,
     convClass,
-    leftThisWeek,
     daysSince: daysSinceLastIntro(lastAt),
     campaignsAvgPct,
   };

@@ -10,9 +10,11 @@ import {
   type DashboardClient,
   type InstantlyCampaign,
   type Plan,
+  type ToggledCampaign,
   type WeeklyMetric,
 } from './types';
 import { addDays, getMondayOf, weekKey } from './derive';
+import { loadMarketsByClient } from './markets';
 
 interface ClientRow {
   id: string;
@@ -41,6 +43,8 @@ interface ClientRow {
   monthly_target: number | null;
   intros_this_month: number | null;
   portal_url: string | null;
+  intro_dates: string[] | null;
+  toggle_paused_campaigns: ToggledCampaign[] | null;
 }
 
 export async function loadDashboardClients(): Promise<{
@@ -91,11 +95,12 @@ export async function loadDashboardClients(): Promise<{
     return { data: all, error: null };
   }
 
-  const [clientsRes, metricsRes, campaignsRes, bisonRes] = await Promise.all([
+  const [clientsRes, metricsRes, campaignsRes, bisonRes, marketsByClient] = await Promise.all([
     sb.from('clients').select('*').order('name'),
     fetchAllMetrics(),
     sb.from('instantly_campaigns').select('*'),
     sb.from('bison_campaigns').select('*'),
+    loadMarketsByClient(),
   ]);
 
   if (clientsRes.error) {
@@ -174,6 +179,9 @@ export async function loadDashboardClients(): Promise<{
       bisonCampaigns: linkedBison,
       metricsByWeek: metricsByClient.get(c.id) ?? {},
       portalActive: c.portal_active ?? false,
+      intro_dates: c.intro_dates ?? [],
+      toggle_paused_campaigns: c.toggle_paused_campaigns ?? [],
+      markets: marketsByClient ? marketsByClient.get(c.id) ?? [] : null,
     };
   });
 
