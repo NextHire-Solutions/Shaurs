@@ -93,7 +93,15 @@ export async function planToggle(clientId: string, action: ToggleAction): Promis
   const sb = getSupabase();
 
   let candidates: Omit<PlannedCampaign, 'status'>[];
-  if (action === 'pause') {
+  const held = client.toggle_paused_campaigns ?? [];
+  /*
+   * Pause: every linked campaign. Resume: exactly what this toggle paused —
+   * or, when it paused nothing, every linked campaign, so campaigns paused
+   * ELSEWHERE (in EmailBison, or by a status change) can be resumed here too
+   * (Eddy, 30 Sep: "on 54 Realty I cannot press play"). `classify` resumes
+   * only the ones live-paused right now, and the dialog previews them first.
+   */
+  if (action === 'pause' || held.length === 0) {
     const instIds = client.instantly_campaign_ids ?? [];
     const bisonIds = client.bison_campaign_ids ?? [];
     const [inst, bison] = await Promise.all([
@@ -115,7 +123,7 @@ export async function planToggle(clientId: string, action: ToggleAction): Promis
       })),
     ];
   } else {
-    candidates = (client.toggle_paused_campaigns ?? []).map((c) => ({
+    candidates = held.map((c) => ({
       platform: c.platform, id: c.id, int_id: c.int_id ?? null, name: c.name,
     }));
   }

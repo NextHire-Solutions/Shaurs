@@ -2650,7 +2650,16 @@ function ClientRow({
   // Play/Pause for every campaign of this client. "Paused" means this toggle
   // is holding campaigns paused — Play resumes exactly those.
   const held = client.toggle_paused_campaigns?.length ?? 0;
-  const campToggle = held > 0 ? (
+  // Nothing running and everything paused/finished — paused somewhere else.
+  // Play still resumes: the dialog previews the live-paused ones first.
+  const pausedElsewhere = held === 0 && activeCampaigns.length === 0 && hasLaunched;
+  const campToggle = pausedElsewhere ? (
+    <button
+      className="camp-toggle is-paused"
+      title="Every campaign is paused or finished. Click to see which paused ones can be resumed."
+      onClick={(e) => { e.stopPropagation(); onToggleCampaigns('resume'); }}
+    >▶</button>
+  ) : held > 0 ? (
     <button
       className="camp-toggle is-paused"
       title={`Campaigns paused from here (${held}). Click to resume them.`}
