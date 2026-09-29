@@ -1952,6 +1952,7 @@ function BiWeeklyTable({
                   <div className="ib-cell">
                     <span className={introsCls}>{intros}/{target}</span>
                     <CarryBadge cycle={cycle} />
+                    <AheadBadge cycle={cycle} />
                   </div>
                 ) : (
                   <span className="api-none" title="No monthly target or billing date set">—</span>
@@ -2270,6 +2271,27 @@ const fmtMDY = (d: Date) =>
 // progress appears, only when intros carried over from a previous billing
 // cycle. Hover or focus opens the four numbers the spec asks for, so nobody
 // has to work out "4 + 2 − 2" by hand.
+/**
+ * "+N ahead" — intros delivered beyond what this billing cycle requires (its
+ * target plus anything carried in). The client's ask, 30 Sep: over-delivery
+ * pays a shortfall down but banks no credit, so the team needs to SEE when a
+ * client is already ahead and ease off. Display only — it does not change
+ * what the next cycle requires. Same badge as BrokerStaffer OS.
+ */
+function AheadBadge({ cycle }: { cycle: CycleState }) {
+  const ahead = cycle.delivered - cycle.required;
+  if (cycle.target <= 0 || ahead <= 0) return null;
+  return (
+    <span
+      className="ahead-badge"
+      title={`${ahead} more intro${ahead === 1 ? '' : 's'} than this cycle requires (${cycle.delivered} delivered, ${cycle.required} required). Extra intros do not carry into the next cycle.`}
+      aria-label={`${ahead} intros ahead of this cycle's requirement`}
+    >
+      +{ahead} ahead
+    </span>
+  );
+}
+
 function CarryBadge({ cycle }: { cycle: CycleState }) {
   // Fixed-position popover: the table scrolls inside an overflow container
   // that would clip an absolutely-positioned one at the edges.
@@ -2330,6 +2352,7 @@ function IntrosBillingCell({
       </span>
       <span className="ib-due">due</span>
       <CarryBadge cycle={cy} />
+      <AheadBadge cycle={cy} />
     </div>
   );
 }
@@ -2617,10 +2640,10 @@ function ClientRow({
   const markets = client.markets;
   const marketsLine = markets === null ? null : (
     <div
-      className={'client-markets' + (markets.length === 0 ? ' is-empty' : '')}
-      title={markets.length ? markets.map(describeMarket).join('\n') : 'No markets added in the OS yet'}
+      className={'client-markets' + (!markets.markets ? ' is-empty' : '')}
+      title={describeMarket(markets) || 'No markets added in the OS yet'}
     >
-      {markets.length === 0 ? 'No markets' : `${markets.length} market${markets.length === 1 ? '' : 's'}`}
+      {!markets.markets ? 'No markets' : `${markets.markets} market${markets.markets === 1 ? '' : 's'}`}
     </div>
   );
 

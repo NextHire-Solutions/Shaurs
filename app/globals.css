@@ -675,6 +675,11 @@ tr.is-client-paused:hover { background: #F1F5F9; }
   font-size: 10.5px; font-weight: 700; white-space: nowrap; cursor: help; outline: none;
 }
 .carry-badge:focus-visible { box-shadow: 0 0 0 2px var(--red-border); }
+.ahead-badge {
+  display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px;
+  background: var(--green-bg); border: 1px solid var(--green-border); color: var(--green);
+  font-size: 10.5px; font-weight: 700; white-space: nowrap; cursor: default;
+}
 .carry-badge.carry-cleared { background: var(--bg); border-color: var(--border); color: var(--text-muted); }
 .carry-pop {
   position: fixed; z-index: 60; width: 240px; display: flex; flex-direction: column; gap: 4px;

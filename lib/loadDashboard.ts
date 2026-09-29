@@ -181,7 +181,7 @@ export async function loadDashboardClients(): Promise<{
       portalActive: c.portal_active ?? false,
       intro_dates: c.intro_dates ?? [],
       toggle_paused_campaigns: c.toggle_paused_campaigns ?? [],
-      markets: marketsByClient ? marketsByClient.get(c.id) ?? [] : null,
+      markets: marketsByClient ? marketsByClient.get(c.id) ?? { markets: null, mls: [], areas: [] } : null,
     };
   });
 

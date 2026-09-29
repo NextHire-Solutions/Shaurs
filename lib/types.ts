@@ -125,10 +125,9 @@ export interface DashboardClient extends Client {
   // Derived runtime field (not a DB column): true when the client appears
   // in Corofy's /api/clients/portals response with portal_enabled=true.
   portalActive: boolean;
-  // Markets from the BrokerStaffer OS (os_client_markets). Null when the OS
-  // database isn't configured or couldn't be reached — distinct from [] (no
-  // markets entered yet).
-  markets: Market[] | null;
+  // Markets / MLS / Area from the BrokerStaffer OS (os_clients, 0022). Null
+  // when the OS database isn't configured or couldn't be reached.
+  markets: Market | null;
 }
 
 export const HISTORICAL_WEEKS = 26;
